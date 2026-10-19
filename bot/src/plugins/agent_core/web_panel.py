@@ -288,7 +288,6 @@ _RAW_PANEL_HTML = r"""<!DOCTYPE html>
               </div>
             </div>
           </div>
-          <div id="saved-refs-pills" class="mt-3 pt-3 border-t border-surface-800 flex flex-wrap gap-1.5"></div>
         </div>
       </div>
 
@@ -355,6 +354,64 @@ _RAW_PANEL_HTML = r"""<!DOCTYPE html>
             <button onclick="submitGroupExtract()" id="btn-extract-group" class="tactile-btn px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs">
               提炼并保存群画像 JSON
             </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 全新核心卡片：群聊成员 (群u) 白名单多选管理中心 -->
+      <div class="rounded-2xl border border-sky-500/30 bg-surface-900/90 p-5 space-y-4 shadow-lg">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-surface-800 gap-3">
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30">WHITELIST</span>
+              <h3 class="text-sm font-bold text-slate-100">🛡️ 群聊成员白名单管理 (群u发言限制)</h3>
+            </div>
+            <p class="text-xs text-slate-400 mt-1">
+              开启后，机器人仅响应已勾选群成员的发言（超级管理员自动豁免）。未开启时，白名单群内的所有成员均可正常与机器人对话。
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <span id="group-user-wl-status-label" class="text-xs font-mono text-slate-400">白名单过滤: 禁用</span>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" id="group-user-wl-master-toggle" class="sr-only peer" onchange="toggleGroupUserWhitelist(this.checked)">
+              <div class="w-11 h-6 bg-surface-700 rounded-full peer peer-checked:bg-sky-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>
+            </label>
+          </div>
+        </div>
+
+        <!-- 控制工具栏：选择群、读取成员、搜索过滤、快捷选择、保存按钮 -->
+        <div class="flex flex-wrap items-center justify-between gap-3 bg-surface-950 p-3 rounded-xl border border-surface-800">
+          <div class="flex flex-wrap items-center gap-2.5 flex-1 min-w-[280px]">
+            <span class="text-xs text-slate-400 font-medium">目标群号:</span>
+            <select id="wl-group-select" class="px-3 py-1.5 rounded-xl bg-surface-900 border border-surface-700 text-xs font-mono text-slate-200 focus:outline-none focus:border-sky-500" onchange="onWhitelistGroupChange()">
+              <option value="">-- 选择白名单群 --</option>
+            </select>
+            <input id="wl-custom-group-input" type="text" placeholder="或输入群号" class="w-32 px-3 py-1.5 rounded-xl bg-surface-900 border border-surface-700 text-xs font-mono text-slate-200 focus:outline-none focus:border-sky-500" />
+            <button onclick="fetchGroupMembers()" id="btn-fetch-members" class="tactile-btn px-3.5 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs flex items-center gap-1.5">
+              <span>🔄 读取群成员</span>
+            </button>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <input id="wl-member-search" type="text" placeholder="🔍 搜索昵称/名片/QQ号..." oninput="filterGroupMembers()" class="w-44 px-3 py-1.5 rounded-xl bg-surface-900 border border-surface-700 text-xs text-slate-200 focus:outline-none focus:border-sky-500" />
+            <button onclick="selectAllMembers(true)" class="px-2.5 py-1.5 rounded-lg border border-surface-700 bg-surface-850 hover:border-surface-600 text-slate-300 text-xs">全选</button>
+            <button onclick="selectAllMembers(false)" class="px-2.5 py-1.5 rounded-lg border border-surface-700 bg-surface-850 hover:border-surface-600 text-slate-300 text-xs">清空</button>
+            <button onclick="invertMemberSelection()" class="px-2.5 py-1.5 rounded-lg border border-surface-700 bg-surface-850 hover:border-surface-600 text-slate-300 text-xs">反选</button>
+            <button onclick="saveGroupUserWhitelist()" id="btn-save-user-wl" class="tactile-btn px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs flex items-center gap-1.5">
+              <span>💾 保存该群白名单</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 统计信息与多选容器 -->
+        <div class="flex items-center justify-between text-xs px-1">
+          <span id="wl-member-stats" class="text-slate-400 font-mono">请先选择群号并点击“读取群成员”</span>
+          <span id="wl-save-status-msg" class="text-emerald-400 font-mono text-[11px]"></span>
+        </div>
+
+        <div id="wl-members-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5 max-h-[360px] overflow-y-auto p-3 rounded-xl bg-surface-950 border border-surface-800">
+          <div class="col-span-full text-center py-10 text-xs text-slate-500">
+            暂未加载群成员，请在上方选择群号后点击【🔄 读取群成员】
           </div>
         </div>
       </div>
@@ -659,12 +716,9 @@ _RAW_PANEL_HTML = r"""<!DOCTYPE html>
             : 'char-btn tactile-btn px-3 py-2 rounded-xl border border-surface-700 bg-surface-850 hover:border-surface-600 text-left';
         });
 
-        // 已归档立绘
+        // 已归档立绘 (仅保留数量统计，不再平铺冗余角色名)
         const refs = d.saved_refs || [];
         document.getElementById('info-refs-count').innerText = refs.length + ' 张';
-        document.getElementById('saved-refs-pills').innerHTML = refs.length
-          ? refs.map(r => `<span class="px-2 py-0.5 rounded-md bg-surface-800 border border-surface-700 font-mono text-[11px] text-slate-300">🖼️ ${r}</span>`).join('')
-          : '<span class="text-[11px] text-slate-500">群内发图配文“这是XX角色图”自动归档</span>';
 
         // 群白名单
         const groups = d.active_groups || [];
@@ -811,8 +865,254 @@ _RAW_PANEL_HTML = r"""<!DOCTYPE html>
         if (sqqBadge && d.superuser_qq) {
           sqqBadge.innerText = '默认QQ: ' + d.superuser_qq;
         }
+
+        // 群成员白名单总开关与选项同步
+        const wlToggle = document.getElementById('group-user-wl-master-toggle');
+        if (wlToggle) wlToggle.checked = !!d.group_user_whitelist_enabled;
+        const wlStatusLabel = document.getElementById('group-user-wl-status-label');
+        if (wlStatusLabel) {
+          wlStatusLabel.innerText = d.group_user_whitelist_enabled ? '白名单过滤: 已启用' : '白名单过滤: 禁用';
+          wlStatusLabel.className = d.group_user_whitelist_enabled
+            ? 'text-xs font-mono text-emerald-400 font-semibold'
+            : 'text-xs font-mono text-slate-400';
+        }
+
+        // 同步群白名单下拉列表选项
+        const wlGroupSelect = document.getElementById('wl-group-select');
+        if (wlGroupSelect) {
+          const currentVal = wlGroupSelect.value;
+          const groups = d.active_groups || [];
+          const opts = ['<option value="">-- 选择白名单群 --</option>'].concat(
+            groups.map(g => `<option value="${g}">群 ${g}</option>`)
+          );
+          const newHtml = opts.join('');
+          if (wlGroupSelect.innerHTML !== newHtml) {
+            wlGroupSelect.innerHTML = newHtml;
+            if (currentVal && groups.includes(currentVal)) {
+              wlGroupSelect.value = currentVal;
+            } else if (groups.length > 0 && !currentWlGroupId) {
+              wlGroupSelect.value = groups[0];
+              currentWlGroupId = groups[0];
+              const customInp = document.getElementById('wl-custom-group-input');
+              if (customInp && !customInp.value) customInp.value = groups[0];
+            }
+          }
+        }
       } catch (e) {
         console.error(e);
+      }
+    }
+
+    let currentWlGroupId = '';
+    let currentGroupMembers = [];
+    let selectedWlUserIds = new Set();
+
+    async function toggleGroupUserWhitelist(checked) {
+      try {
+        const res = await apiPost('/api/switch/group_user_whitelist', { enable: checked });
+        showToast(res.enabled ? '🛡️ 群成员发言白名单过滤已开启' : '已关闭群成员白名单过滤');
+        refreshDashboard();
+      } catch (e) {
+        showToast('切换白名单开关失败: ' + e);
+      }
+    }
+
+    function onWhitelistGroupChange() {
+      const sel = document.getElementById('wl-group-select');
+      const val = (sel ? sel.value : '').trim();
+      if (val) {
+        currentWlGroupId = val;
+        const customInp = document.getElementById('wl-custom-group-input');
+        if (customInp) customInp.value = val;
+        fetchGroupMembers();
+      }
+    }
+
+    async function fetchGroupMembers() {
+      const customGid = (document.getElementById('wl-custom-group-input').value || '').trim();
+      const selGid = (document.getElementById('wl-group-select').value || '').trim();
+      const gid = customGid || selGid || currentWlGroupId;
+      if (!gid) {
+        showToast('请先选择或输入群号');
+        return;
+      }
+      currentWlGroupId = gid;
+      const btn = document.getElementById('btn-fetch-members');
+      const grid = document.getElementById('wl-members-grid');
+      const stats = document.getElementById('wl-member-stats');
+      if (btn) btn.disabled = true;
+      if (stats) stats.innerText = `⏳ 正在读取群 ${gid} 成员列表...`;
+      if (grid) grid.innerHTML = '<div class="col-span-full text-center py-10 text-xs text-sky-400">正在通过 OneBot API 检索群成员列表...</div>';
+
+      try {
+        const [memResp, wlResp] = await Promise.all([
+          fetch(`/api/groups/members?group_id=${gid}`).then(r => r.json()),
+          fetch(`/api/whitelist/users?group_id=${gid}`).then(r => r.json())
+        ]);
+
+        if (memResp.code !== 0) {
+          if (grid) grid.innerHTML = `<div class="col-span-full text-center py-10 text-xs text-red-400">读取失败: ${memResp.message || '未知错误'}</div>`;
+          if (stats) stats.innerText = `读取失败: ${memResp.message}`;
+          return;
+        }
+
+        currentGroupMembers = memResp.members || [];
+        const savedUsers = (wlResp.code === 0 && Array.isArray(wlResp.users)) ? wlResp.users : [];
+        selectedWlUserIds = new Set(savedUsers.map(String));
+
+        renderGroupMembers();
+        showToast(`✅ 成功获取群 ${gid} 的 ${currentGroupMembers.length} 名成员`);
+      } catch (e) {
+        if (grid) grid.innerHTML = `<div class="col-span-full text-center py-10 text-xs text-red-400">网络异常: ${e}</div>`;
+        if (stats) stats.innerText = `异常: ${e}`;
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    function renderGroupMembers() {
+      const grid = document.getElementById('wl-members-grid');
+      const stats = document.getElementById('wl-member-stats');
+      if (!grid) return;
+
+      const filterKw = (document.getElementById('wl-member-search')?.value || '').trim().toLowerCase();
+      const visibleMembers = currentGroupMembers.filter(m => {
+        if (!filterKw) return true;
+        const name = (m.display_name || '').toLowerCase();
+        const nick = (m.nickname || '').toLowerCase();
+        const card = (m.card || '').toLowerCase();
+        const uid = String(m.user_id);
+        return name.includes(filterKw) || nick.includes(filterKw) || card.includes(filterKw) || uid.includes(filterKw);
+      });
+
+      if (stats) {
+        stats.innerText = `群 ${currentWlGroupId} · 共 ${currentGroupMembers.length} 人 · 当前已勾选 ${selectedWlUserIds.size} 人 (当前显示 ${visibleMembers.length} 人)`;
+      }
+
+      if (!visibleMembers.length) {
+        grid.innerHTML = '<div class="col-span-full text-center py-8 text-xs text-slate-500">未找到匹配的群成员</div>';
+        return;
+      }
+
+      grid.innerHTML = visibleMembers.map(m => {
+        const uid = String(m.user_id);
+        const isSelected = selectedWlUserIds.has(uid);
+        const roleBadge = m.role === 'owner'
+          ? '<span class="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">群主</span>'
+          : (m.role === 'admin'
+            ? '<span class="text-[9px] px-1 py-0.2 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30">管理</span>'
+            : '');
+        
+        const cardClass = isSelected
+          ? 'cursor-pointer p-2 rounded-xl border border-sky-500 bg-sky-500/15 hover:bg-sky-500/20 transition-all flex items-center gap-2 relative shadow'
+          : 'cursor-pointer p-2 rounded-xl border border-surface-800 bg-surface-900/80 hover:border-surface-700 hover:bg-surface-850 transition-all flex items-center gap-2 relative';
+
+        const checkMark = isSelected
+          ? '<div class="w-4 h-4 rounded-md bg-sky-500 text-slate-950 flex items-center justify-center font-bold text-[10px] shrink-0">✓</div>'
+          : '<div class="w-4 h-4 rounded-md border border-surface-700 bg-surface-950 shrink-0"></div>';
+
+        return `
+          <div onclick="toggleMemberSelection('${uid}')" class="${cardClass}">
+            <img src="https://q1.qlogo.cn/g?b=qq&nk=${uid}&s=100" class="w-7 h-7 rounded-full bg-surface-800 shrink-0" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 24 24\\' fill=\\'%2364748b\\'><circle cx=\\'12\\' cy=\\'8\\' r=\\'4\\'/><path d=\\'M4 20c0-4 4-6 8-6s8 2 8 6\\'/></svg>'" />
+            <div class="flex-1 min-w-0 pr-1">
+              <div class="flex items-center gap-1">
+                <span class="text-xs font-semibold text-slate-200 truncate" title="${m.display_name}">${m.display_name}</span>
+                ${roleBadge}
+              </div>
+              <div class="text-[10px] font-mono text-slate-400 truncate">${uid}</div>
+            </div>
+            ${checkMark}
+          </div>
+        `;
+      }).join('');
+    }
+
+    function toggleMemberSelection(userId) {
+      const uid = String(userId);
+      if (selectedWlUserIds.has(uid)) {
+        selectedWlUserIds.delete(uid);
+      } else {
+        selectedWlUserIds.add(uid);
+      }
+      renderGroupMembers();
+    }
+
+    function selectAllMembers(selectAll) {
+      const filterKw = (document.getElementById('wl-member-search')?.value || '').trim().toLowerCase();
+      const targetList = currentGroupMembers.filter(m => {
+        if (!filterKw) return true;
+        const name = (m.display_name || '').toLowerCase();
+        const nick = (m.nickname || '').toLowerCase();
+        const card = (m.card || '').toLowerCase();
+        const uid = String(m.user_id);
+        return name.includes(filterKw) || nick.includes(filterKw) || card.includes(filterKw) || uid.includes(filterKw);
+      });
+
+      targetList.forEach(m => {
+        const uid = String(m.user_id);
+        if (selectAll) {
+          selectedWlUserIds.add(uid);
+        } else {
+          selectedWlUserIds.delete(uid);
+        }
+      });
+      renderGroupMembers();
+    }
+
+    function invertMemberSelection() {
+      const filterKw = (document.getElementById('wl-member-search')?.value || '').trim().toLowerCase();
+      const targetList = currentGroupMembers.filter(m => {
+        if (!filterKw) return true;
+        const name = (m.display_name || '').toLowerCase();
+        const nick = (m.nickname || '').toLowerCase();
+        const card = (m.card || '').toLowerCase();
+        const uid = String(m.user_id);
+        return name.includes(filterKw) || nick.includes(filterKw) || card.includes(filterKw) || uid.includes(filterKw);
+      });
+
+      targetList.forEach(m => {
+        const uid = String(m.user_id);
+        if (selectedWlUserIds.has(uid)) {
+          selectedWlUserIds.delete(uid);
+        } else {
+          selectedWlUserIds.add(uid);
+        }
+      });
+      renderGroupMembers();
+    }
+
+    function filterGroupMembers() {
+      renderGroupMembers();
+    }
+
+    async function saveGroupUserWhitelist() {
+      const gid = currentWlGroupId || (document.getElementById('wl-custom-group-input').value || '').trim();
+      if (!gid) {
+        showToast('请先选择或输入群号');
+        return;
+      }
+      const users = Array.from(selectedWlUserIds);
+      const btn = document.getElementById('btn-save-user-wl');
+      const statusEl = document.getElementById('wl-save-status-msg');
+      if (btn) btn.disabled = true;
+      if (statusEl) statusEl.innerText = '正在保存白名单...';
+
+      try {
+        const res = await apiPost('/api/whitelist/users', { group_id: gid, users: users });
+        if (res.code === 0) {
+          showToast(`💾 群 ${gid} 白名单已保存！(共 ${users.length} 人)`);
+          if (statusEl) statusEl.innerText = `✅ 已于 ${new Date().toLocaleTimeString()} 保存 ${users.length} 个白名单QQ`;
+          setTimeout(() => { if (statusEl) statusEl.innerText = ''; }, 4000);
+          refreshDashboard();
+        } else {
+          showToast('保存失败: ' + (res.message || '未知错误'));
+          if (statusEl) statusEl.innerText = '保存失败: ' + (res.message || '未知错误');
+        }
+      } catch (e) {
+        showToast('保存异常: ' + e);
+        if (statusEl) statusEl.innerText = '请求异常: ' + e;
+      } finally {
+        if (btn) btn.disabled = false;
       }
     }
 

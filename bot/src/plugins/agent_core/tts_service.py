@@ -626,7 +626,8 @@ async def synthesize(
     if time.monotonic() < _open_until:
         raise TTSGenerationError("语音熔断保护中，改用文字。")
     try:
-        eff_timeout = max(600.0, float(timeout or 600.0))
+        raw_to = float(timeout if timeout is not None else TTS_DEFAULT_TIMEOUT)
+        eff_timeout = raw_to if (math.isfinite(raw_to) and raw_to > 0) else TTS_DEFAULT_TIMEOUT
         async with asyncio.timeout(eff_timeout):
             async with _TTS_MPS_LOCK:
                 role = resolve_voice_role(role_name)

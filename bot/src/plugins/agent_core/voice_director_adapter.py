@@ -20,7 +20,15 @@ _spec.loader.exec_module(_director)
 
 async def select_delivery(text: str, style: str, role: str, candidates: list[dict]) -> dict:
     cfg = _director._load_env_config()
-    query = f"角色：{role}\n台词：{text}\n风格：{style}\n参考音频：{candidates}"
+    # 剥离本地文件绝对路径等与情绪决策无关的字段，精简 Prompt
+    cleaned_candidates = [
+        {
+            k: v for k, v in r.items()
+            if k in ("name", "desc", "tags", "text")
+        }
+        for r in candidates if isinstance(r, dict)
+    ]
+    query = f"角色：{role}\n台词：{text}\n风格：{style}\n参考音频：{cleaned_candidates}"
     providers = []
 
     ds_key = (cfg.get("DEEPSEEK_API_KEY") or "").strip()
@@ -87,15 +95,4 @@ async def select_delivery(text: str, style: str, role: str, candidates: list[dic
     except TimeoutError:
         pass
 
-    if candidates and valid_names:
-        fallback_ref = next((r["name"] for r in candidates if r.get("name") == "default"), candidates[0]["name"])
-        return {
-            "ref_name": fallback_ref,
-            "speed": 1.0,
-            "temperature": 0.78,
-            "top_p": 0.85,
-            "pause": 0.2,
-            "decision_source": "ai:fallback_director",
-            "reasoning": "云端导演接口响应超时，使用角色基准情绪参考保障语音合成",
-        }
     raise TTSGenerationError("AI 声音导演未返回有效情绪选择，改用文字。")

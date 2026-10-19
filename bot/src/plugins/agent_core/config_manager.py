@@ -43,6 +43,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "reply_interval_seconds": 3.0,  # 回复防刷屏冷却秒数
     "training_mode": False,
     "training_groups": [],
+    "group_user_whitelist_enabled": False,
+    "group_user_whitelists": {},
 }
 
 ALLOWED_CHARACTERS = frozenset({"none", "amiya", "kaltsit", "dania", "assistant"})
@@ -230,6 +232,30 @@ class ConfigManager:
     @training_groups.setter
     def training_groups(self, value: list) -> None:
         self._data["training_groups"] = [str(g) for g in (value or [])]
+
+    @property
+    def group_user_whitelist_enabled(self) -> bool:
+        return bool(self._data.get("group_user_whitelist_enabled", False))
+
+    @group_user_whitelist_enabled.setter
+    def group_user_whitelist_enabled(self, value: bool) -> None:
+        self._data["group_user_whitelist_enabled"] = bool(value)
+
+    @property
+    def group_user_whitelists(self) -> dict[str, list[str]]:
+        val = self._data.get("group_user_whitelists")
+        if isinstance(val, dict):
+            return {str(k): [str(u) for u in v] for k, v in val.items() if isinstance(v, list)}
+        return {}
+
+    @group_user_whitelists.setter
+    def group_user_whitelists(self, value: dict[str, list[str]]) -> None:
+        if isinstance(value, dict):
+            self._data["group_user_whitelists"] = {
+                str(k): [str(u) for u in v] for k, v in value.items() if isinstance(v, list)
+            }
+        else:
+            self._data["group_user_whitelists"] = {}
 
     def get_state(self) -> dict[str, Any]:
         """返回当前配置深拷贝。"""

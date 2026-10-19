@@ -61,12 +61,23 @@ _EXPORT_KEYWORDS = (
 def detect_requested_formats(user_text: str, reply_len: int = 0, is_long_task: bool = False) -> list[str]:
     """检测用户需要导出的文件格式列表（返回如 ['pdf'], ['docx'], ['md']）。
     - 若用户显式点名了 pdf / docx / md，按点名格式返回；
-    - 若用户说了“做成文件/导出文档”但未指定后缀，默认同时生成 ['docx', 'pdf']；
-    - 若未显式要求文件，但回复长度超过 AUTO_FILE_CHAR_THRESHOLD (650字)，自动生成 ['docx'] 突破 QQ 长度限制。
+    - 若用户显式要求“写教案/写论文/导出文档”但未指定后缀，默认同时生成 ['docx', 'pdf']；
+    - 排除“怎么写/如何写”等纯咨询问答，避免误触发文档生成任务；
+    - 普通长文本对话绝不擅自转文件。
     """
     s = (user_text or "").strip().lower()
-    explicit_trigger = s.startswith(_EXPORT_CMD_PREFIXES) or any(k in s for k in _EXPORT_KEYWORDS)
-    if not explicit_trigger and re.search(
+    if not s:
+        return []
+    # 严格排除纯写作咨询、技巧提问与格式探讨
+    if re.search(r"(?:怎么写|如何写|怎样写|有什么要求|格式是啥|需要包含哪些|有什么建议|好写吗|是什么意思|选题怎么选|怎么选题|查重)", s):
+        return []
+
+    explicit_trigger = False
+    if re.search(r"(?:写|出一份|做一份|生成|制作|撰写|编写|设计|制定).{0,25}(?:教案|教学设计|导学案|备课案|论文|开题报告|结项报告|课件讲稿)", s):
+        explicit_trigger = True
+    elif s.startswith(_EXPORT_CMD_PREFIXES) or any(k in s for k in _EXPORT_KEYWORDS):
+        explicit_trigger = True
+    elif re.search(
         r"(?:导出|生成|写|做成|转成|转为|保存为|输出|发我|发个|出一份|做一份|制作).{0,24}(?:pdf|word|docx|markdown|md|文档|文件)",
         s,
         re.IGNORECASE,
@@ -82,13 +93,10 @@ def detect_requested_formats(user_text: str, reply_len: int = 0, is_long_task: b
         if any(w in s for w in ("markdown", ".md", "md文件", "导出md", "生成md", "转md", "/md", "md格式")):
             formats.append("md")
         if not formats:
-            # 用户只说“生成文档/做成文件发我”，默认提供最实用的 Word (.docx) + PDF (.pdf)
+            # 用户只说“写教案/生成文档/做成文件发我”，默认提供最实用的 Word (.docx) + PDF (.pdf)
             formats = ["docx", "pdf"]
         return formats
 
-    # 超长回复自动转文档保护（突破 QQ 字数框限制）
-    if reply_len >= AUTO_FILE_CHAR_THRESHOLD or (is_long_task and reply_len >= 480):
-        return ["docx"]
     return []
 
 
@@ -786,7 +794,10 @@ async def send_file_to_qq(
             logger.info(f"成功上传文档至 QQ: {fname} ({len(raw_bytes)} bytes, via=#{idx + 1})")
             return True
         except (asyncio.TimeoutError, ConnectionError) as exc:
-            logger.warning(f"文档 {fname} 第 {idx + 1} 种方式上传超时 ({type(exc).__name__})，尝试下一通道...")
+            if isinstance(exc, asyncio.TimeoutError):
+                logger.warning(f"文档 {fname} 上传回执超时（结果未知，服务端可能正在处理），终止重试以防产生重复群文件")
+                return False
+            logger.warning(f"文档 {fname} 第 {idx + 1} 种方式上传失败 ({type(exc).__name__})，尝试下一通道...")
             if idx == 0 and b64_uri in candidates:
                 continue
             return False
@@ -794,16 +805,6 @@ async def send_file_to_qq(
             logger.debug(f"upload_file ({file_arg[:30]}...) 尝试未通过: {exc}")
             continue
 
-    # 2. 兜底使用 MessageSegment("file", ...) 发送
-    if event is not None:
-        for seg_file in (str(tmp_copy.resolve()), b64_uri):
-            try:
-                seg = MessageSegment("file", {"file": seg_file, "name": fname})
-                await asyncio.wait_for(bot.send(event, seg), timeout=25.0)
-                logger.info(f"通过 MessageSegment(file) 成功发送文档: {fname}")
-                return True
-            except Exception as exc:
-                logger.warning(f"MessageSegment 发送文档 {fname} 尝试失败: {exc}")
     return False
 
 

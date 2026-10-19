@@ -45,6 +45,15 @@ class GroupSwitchReq(BaseModel):
     enable: Optional[bool] = None
 
 
+class GroupUserWhitelistSwitchReq(BaseModel):
+    enable: bool
+
+
+class GroupUserWhitelistUpdateReq(BaseModel):
+    group_id: str = Field(..., min_length=1)
+    users: list[str] = Field(default_factory=list)
+
+
 class VoiceSwitchReq(BaseModel):
     enable: bool
 
@@ -308,6 +317,8 @@ async def _build_full_status(include_history: bool = False) -> dict[str, Any]:
         "reply_interval_seconds": getattr(state, "reply_interval_seconds", 3.0),
         "training_mode": state.training_mode,
         "training_groups": state.training_groups,
+        "group_user_whitelist_enabled": getattr(state, "group_user_whitelist_enabled", False),
+        "group_user_whitelists": getattr(state, "group_user_whitelists", {}),
         "superuser_qq": state.superuser_qq,
         "training_status": modes.get_training_status() if hasattr(modes, "get_training_status") else {},
     }
@@ -591,6 +602,71 @@ def _register_routes(app: FastAPI, services) -> None:
             state.active_groups = groups
             await state.save()
             return {"code": 0, "active_groups": state.active_groups}
+
+    if "/api/groups/members" not in existing_paths:
+        @app.get("/api/groups/members")
+        async def get_group_members(group_id: str = "") -> dict[str, Any]:
+            from nonebot import get_bots
+            gid = group_id.strip()
+            if not gid:
+                return {"code": 1, "message": "group_id 不能为空", "members": []}
+            bots = get_bots()
+            bot = next(iter(bots.values()), None) if bots else None
+            if not bot:
+                return {"code": 2, "message": "QQ 机器人未连接", "members": []}
+            try:
+                raw_members = await bot.get_group_member_list(group_id=int(gid), no_cache=True)
+                members = []
+                for m in raw_members:
+                    uid = str(m.get("user_id", ""))
+                    nickname = str(m.get("nickname", "") or "")
+                    card = str(m.get("card", "") or "")
+                    role = str(m.get("role", "member"))
+                    members.append({
+                        "user_id": uid,
+                        "nickname": nickname,
+                        "card": card,
+                        "display_name": card if card else nickname,
+                        "role": role,
+                    })
+                return {"code": 0, "group_id": gid, "members": members, "count": len(members)}
+            except Exception as e:
+                logger.error(f"[ControllerAPI] 获取群 {gid} 成员列表失败: {e}")
+                return {"code": 3, "message": f"获取群成员列表失败: {e}", "members": []}
+
+    if "/api/whitelist/users" not in existing_paths:
+        @app.get("/api/whitelist/users")
+        async def get_group_user_whitelist(group_id: str = "") -> dict[str, Any]:
+            gid = group_id.strip()
+            whitelisted = state.get_group_user_whitelist(gid) if gid else []
+            return {
+                "code": 0,
+                "enabled": state.group_user_whitelist_enabled,
+                "group_id": gid,
+                "users": whitelisted,
+                "all_whitelists": state.group_user_whitelists,
+            }
+
+        @app.post("/api/whitelist/users")
+        async def update_group_user_whitelist(req: GroupUserWhitelistUpdateReq) -> dict[str, Any]:
+            gid = req.group_id.strip()
+            users = [str(u).strip() for u in req.users if str(u).strip()]
+            await state.set_group_user_whitelist(gid, users)
+            return {
+                "code": 0,
+                "group_id": gid,
+                "users": state.get_group_user_whitelist(gid),
+                "enabled": state.group_user_whitelist_enabled,
+            }
+
+    if "/api/switch/group_user_whitelist" not in existing_paths:
+        @app.post("/api/switch/group_user_whitelist")
+        async def switch_group_user_whitelist(req: GroupUserWhitelistSwitchReq) -> dict[str, Any]:
+            await state.set_group_user_whitelist_enabled(req.enable)
+            return {
+                "code": 0,
+                "enabled": state.group_user_whitelist_enabled,
+            }
 
     if "/api/switch/comfort" not in existing_paths:
         @app.post("/api/switch/comfort")

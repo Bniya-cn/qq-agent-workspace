@@ -9,7 +9,7 @@ class AgentCoreError(Exception):
 
 
 class DocumentGenerationError(AgentCoreError):
-    user_message = "文档生成或上传失败，已保存的正文可回复“导出”重试。"
+    user_message = "文档生成或上传未完成，请稍后重试。"
 
 
 class DrawPipelineError(AgentCoreError):

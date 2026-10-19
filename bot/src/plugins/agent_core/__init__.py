@@ -1152,6 +1152,13 @@ async def handle_agent_message(bot: Bot, event: MessageEvent):
         auto_reply_mode=bool(getattr(state, "auto_reply_mode", True)),
     ):
         return
+    if group_id and getattr(state, "group_user_whitelist_enabled", False):
+        whitelists = getattr(state, "group_user_whitelists", {}) or {}
+        group_wl = set(str(u) for u in whitelists.get(str(group_id), []))
+        super_qq = str(state.superuser_qq or "").strip()
+        if group_wl and str(uid) not in group_wl and str(uid) != super_qq:
+            logger.debug(f"[白名单拦截] 群 {group_id} 用户 {uid} 不在群用户白名单中，跳过响应")
+            return
     if _in_cooldown(uid) or (group_id and _in_cooldown(f"group:{group_id}")):
         return
     if group_id:
@@ -1191,8 +1198,20 @@ async def handle_agent_message(bot: Bot, event: MessageEvent):
             if isinstance(exc, AgentCoreError):
                 message = str(exc)
             elif isinstance(exc, TimeoutError):
-                message = ("生图请求超时，本次没有成功交付图片，请稍后重试。" if parsed.intent in {Intent.TEXT_TO_IMAGE, Intent.IMAGE_TO_IMAGE}
-                           else "处理请求超时，已保存的文档正文可回复“导出”继续；其他请求请稍后重试。")
+                session = conversation.current()
+                cur_doc = session.document if session else None
+                has_valid_draft = (
+                    cur_doc is not None
+                    and cur_doc.get("prompt") == parsed.clean_text
+                    and cur_doc.get("complete") is False
+                    and len(str(cur_doc.get("content") or "").strip()) >= 50
+                )
+                if parsed.intent in {Intent.TEXT_TO_IMAGE, Intent.IMAGE_TO_IMAGE}:
+                    message = "生图请求超时，本次没有成功交付图片，请稍后重试。"
+                elif has_valid_draft:
+                    message = "文档本次生成超时，已为您保存阶段性草稿，可回复“导出”继续续写。"
+                else:
+                    message = "处理请求超时，请稍后重试。"
             else:
                 message = AgentCoreError.user_message
             if not await _safe_send(bot, event, message):
@@ -1212,9 +1231,11 @@ async def _send_exported_documents(bot: Bot, event: MessageEvent, files: list[Pa
         ok = await doc_service.send_file_to_qq(bot, event, path, group_id=group_id, user_id=uid)
         (sent if ok else failed).append(path.name)
     if sent:
-        await _safe_send(bot, event, "已上传" + ("到群文件：" if group_id else "为私聊文件：") + "、".join(sent))
+        prefix = (MessageSegment.at(uid) + " ") if group_id else ""
+        dest = "到群文件：" if group_id else "为私聊文件："
+        await _safe_send(bot, event, prefix + "已上传" + dest + "、".join(sent))
     if failed:
-        await _safe_send(bot, event, "以下文件已在本机生成，但尚未确认 QQ 上传成功：" + "、".join(failed) + "。请先检查文件列表，再回复“导出”重试。")
+        await _safe_send(bot, event, "文档正文已撰写保存，但 QQ 文件上传失败：" + "、".join(failed) + "。请稍后重试。")
     return bool(sent) and not failed
 
 
@@ -1367,8 +1388,13 @@ async def _handle_agent_message(bot: Bot, event: MessageEvent, parsed: ParsedMes
     save_ref_match = _SAVE_REF_ONLY_RE.search(plain) if image_b64_list else None
     is_draw = parsed.intent in {Intent.TEXT_TO_IMAGE, Intent.IMAGE_TO_IMAGE}
 
-    is_long_task = _is_long_task_or_draw_intent(plain, has_image=bool(image_b64_list)) or bool(extra_file_paths)
-    if is_long_task or is_draw:
+    is_doc_task = bool(explicit_formats) and not is_draw
+    is_long_task = _is_long_task_or_draw_intent(plain, has_image=bool(image_b64_list)) or bool(extra_file_paths) or is_doc_task
+    if is_doc_task:
+        ack_msg = (MessageSegment.at(uid) + " 博士，阿米娅已经收到您的要求啦，正在为您撰写，请稍候片刻~") if group_id else "博士，阿米娅已经收到您的要求啦，正在为您撰写，请稍候片刻~"
+        await _safe_send(bot, event, ack_msg)
+        recorder.log(f"已发送文档接单确认 [{source_desc}]")
+    elif is_long_task or is_draw:
         ack_text = _get_ack_message(state.active_character, plain, has_ref_img=bool(image_b64_list))
         await _safe_send(bot, event, ack_text)
         recorder.log(f"已发送待机确认 [{source_desc}]: '{ack_text}'")
@@ -1392,25 +1418,50 @@ async def _handle_agent_message(bot: Bot, event: MessageEvent, parsed: ParsedMes
     )
     recorder.progress_tracker.update(current_task_id.get(), kind="image" if is_draw else "text",
                                      stage="调用模型", percent=15)
-    reply = await _dispatch_reply(
-        uid=uid, group_id=group_id,
-        user_text=(effective_query + doc_service.DOCUMENT_PROMPT if explicit_formats else plain if is_draw else effective_query),
-        is_long_task=is_long_task, is_draw=is_draw, image_b64_list=image_b64_list, file_paths=extra_file_paths,
-    )
-    if not reply:
-        raise DrawPipelineError() if is_draw else LLMProviderError()
-    recorder.progress_tracker.update(current_task_id.get(), stage="准备文件或图片投递", percent=85, output_text=reply)
 
-    if explicit_formats and doc_service.is_placeholder_document(reply):
+    writing_active = True
+
+    async def _doc_30s_heartbeat():
+        try:
+            await asyncio.sleep(30.0)
+            if writing_active:
+                hb_msg = (MessageSegment.at(uid) + " 博士，内容篇幅较长，正在深入撰写中，请稍候片刻哦~") if group_id else "博士，内容篇幅较长，正在深入撰写中，请稍候片刻哦~"
+                await _safe_send(bot, event, hb_msg)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+
+    hb_task = asyncio.create_task(_doc_30s_heartbeat()) if is_doc_task else None
+
+    try:
         reply = await _dispatch_reply(
-            uid=uid,
-            group_id=group_id,
-            user_text=effective_query + doc_service.DOCUMENT_PROMPT,
-            is_long_task=True,
-            file_paths=extra_file_paths,
+            uid=uid, group_id=group_id,
+            user_text=(effective_query + doc_service.DOCUMENT_PROMPT if explicit_formats else plain if is_draw else effective_query),
+            is_long_task=is_long_task, is_draw=is_draw, image_b64_list=image_b64_list, file_paths=extra_file_paths,
         )
-        if not reply or doc_service.is_placeholder_document(reply):
-            raise DocumentGenerationError("模型没有返回文档正文，本次未生成或上传文件。请稍后重试。")
+        if not reply:
+            raise DrawPipelineError() if is_draw else LLMProviderError()
+        recorder.progress_tracker.update(current_task_id.get(), stage="准备文件或图片投递", percent=85, output_text=reply)
+
+        if explicit_formats and doc_service.is_placeholder_document(reply):
+            reply = await _dispatch_reply(
+                uid=uid,
+                group_id=group_id,
+                user_text=effective_query + doc_service.DOCUMENT_PROMPT,
+                is_long_task=True,
+                file_paths=extra_file_paths,
+            )
+            if not reply or doc_service.is_placeholder_document(reply):
+                raise DocumentGenerationError("模型没有返回文档正文，本次未生成或上传文件。请稍后重试。")
+    finally:
+        writing_active = False
+        if hb_task and not hb_task.done():
+            hb_task.cancel()
+            try:
+                await asyncio.shield(asyncio.wait_for(hb_task, timeout=1.0))
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
 
     _touch_cooldown(uid)
     if group_id:

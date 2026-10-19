@@ -1,0 +1,274 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		944DB8E5944349C89AB7125A /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6481913C465146CCA9E3EB82 /* App.swift */; };
+		AF52F81A46C742EABE279454 /* AgentStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B6F98011C3F4CA49BCA2722 /* AgentStatus.swift */; };
+		1AECBE1C86254281ACE5CE2E /* AgentAPIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C762579AACEA4C87B962219F /* AgentAPIService.swift */; };
+		4B1A2C3D4E5F6A7B8C9D0E1F /* ServiceLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A2B3C4D5E6F7A8B9C0D1E2F /* ServiceLauncher.swift */; };
+		E93928F33A9E4692B2BAD23A /* ControlPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C604530017E45D589BCC358 /* ControlPanelView.swift */; };
+		AA11BB22CC33DD44EE55FF01 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF02 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		B0B53A66431140B8BA8B4C89 /* QQ Agent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "QQ Agent.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		6481913C465146CCA9E3EB82 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
+		8B6F98011C3F4CA49BCA2722 /* AgentStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStatus.swift; sourceTree = "<group>"; };
+		C762579AACEA4C87B962219F /* AgentAPIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentAPIService.swift; sourceTree = "<group>"; };
+		5A2B3C4D5E6F7A8B9C0D1E2F /* ServiceLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceLauncher.swift; sourceTree = "<group>"; };
+		0C604530017E45D589BCC358 /* ControlPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanelView.swift; sourceTree = "<group>"; };
+		CD00ACC5DCF34992A206CEA1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		8660058B8CAF4514B68CE8D3 /* QQAgentController.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QQAgentController.entitlements; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF02 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		B976AFDA234F43029AC0D8BC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		16338510C80E4AED97B9B778 = {
+			isa = PBXGroup;
+			children = (
+				8D5CDCB10A024EDA92D1AC1A /* QQAgentController */,
+				853C364010DC4EF689FBB670 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		853C364010DC4EF689FBB670 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B0B53A66431140B8BA8B4C89 /* QQ Agent.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		8D5CDCB10A024EDA92D1AC1A /* QQAgentController */ = {
+			isa = PBXGroup;
+			children = (
+				6481913C465146CCA9E3EB82 /* App.swift */,
+				0453F000891F43BDB4F919A7 /* Models */,
+				FC29A9D2D64F49AEA457B24E /* Services */,
+				70041C22B56541EABC004BAF /* Views */,
+				AA11BB22CC33DD44EE55FF02 /* Assets.xcassets */,
+				CD00ACC5DCF34992A206CEA1 /* Info.plist */,
+				8660058B8CAF4514B68CE8D3 /* QQAgentController.entitlements */,
+			);
+			path = QQAgentController;
+			sourceTree = "<group>";
+		};
+		0453F000891F43BDB4F919A7 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				8B6F98011C3F4CA49BCA2722 /* AgentStatus.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		FC29A9D2D64F49AEA457B24E /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				C762579AACEA4C87B962219F /* AgentAPIService.swift */,
+				5A2B3C4D5E6F7A8B9C0D1E2F /* ServiceLauncher.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		70041C22B56541EABC004BAF /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				0C604530017E45D589BCC358 /* ControlPanelView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1370CBA225A6404FB0F5222D /* QQAgentController */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0248181EB2C84EBB8DAB8C04 /* Build configuration list for PBXNativeTarget "QQAgentController" */;
+			buildPhases = (
+				5FEA8E55BC76457F827D71DB /* Sources */,
+				B976AFDA234F43029AC0D8BC /* Frameworks */,
+				B87170D45E2A4AF591CE307E /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QQAgentController;
+			productName = QQAgentController;
+			productReference = B0B53A66431140B8BA8B4C89 /* QQ Agent.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9F8476E06160449A8722F7D8 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = 4434E50A36C54A98939436EA /* Build configuration list for PBXProject "QQAgentController" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 16338510C80E4AED97B9B778;
+			productRefGroup = 853C364010DC4EF689FBB670 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				1370CBA225A6404FB0F5222D /* QQAgentController */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B87170D45E2A4AF591CE307E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA11BB22CC33DD44EE55FF01 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		5FEA8E55BC76457F827D71DB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				944DB8E5944349C89AB7125A /* App.swift in Sources */,
+				AF52F81A46C742EABE279454 /* AgentStatus.swift in Sources */,
+				1AECBE1C86254281ACE5CE2E /* AgentAPIService.swift in Sources */,
+				4B1A2C3D4E5F6A7B8C9D0E1F /* ServiceLauncher.swift in Sources */,
+				E93928F33A9E4692B2BAD23A /* ControlPanelView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		0D3DCDAFE27742288E3EF161 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				GCC_DYNAMIC_NO_PIC = NO;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		DCDE2E05AC0144EC915959CB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		9969821A17E443B09AB7BDA9 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = QQAgentController/QQAgentController.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = QQAgentController/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = local.qqagent.controller;
+				PRODUCT_NAME = "QQ Agent";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		4495319034D54E62B576F063 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = QQAgentController/QQAgentController.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = QQAgentController/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = local.qqagent.controller;
+				PRODUCT_NAME = "QQ Agent";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4434E50A36C54A98939436EA /* Build configuration list for PBXProject "QQAgentController" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0D3DCDAFE27742288E3EF161 /* Debug */,
+				DCDE2E05AC0144EC915959CB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0248181EB2C84EBB8DAB8C04 /* Build configuration list for PBXNativeTarget "QQAgentController" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9969821A17E443B09AB7BDA9 /* Debug */,
+				4495319034D54E62B576F063 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 9F8476E06160449A8722F7D8 /* Project object */;
+}

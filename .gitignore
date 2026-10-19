@@ -1,0 +1,55 @@
+# Secrets and local credentials
+.env
+.env.*
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python runtime and generated files
+**/.venv/
+**/__pycache__/
+*.py[cod]
+*.log
+*.sqlite*
+*.db
+*.db-*
+*.bak
+*.prevoice.bak
+
+# Personal runtime data; retain shared character presets and knowledge only
+/bot/data/*
+!/bot/data/presets/
+/bot/data/presets/*
+!/bot/data/presets/*.txt
+!/bot/data/knowledge/
+/bot/data/knowledge/*
+!/bot/data/knowledge/*.txt
+!/bot/data/knowledge/*.json
+
+# Third-party local installations, nested repositories, model weights and packages
+/gpt-sovits/
+/napcat/
+*.ckpt
+*.pth
+*.pt
+*.safetensors
+*.onnx
+*.node
+*.zip
+*.dmg
+
+# Build output and local diagnostics
+/.codex-delivery/
+/plan/
+/gg-test/
+/_*.txt
+/HANDOFF-*.md
+/docs/
+/bot/bot.restart.log
+/bot/watchdog.log
+/macos-controller/build/
+/macos-controller/DerivedData/
+/macos-controller/QQAgentController.bin
+*.xcuserstate
+**/xcuserdata/
+.DS_Store

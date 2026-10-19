@@ -1,0 +1,273 @@
+{
+  "character_key": "char_002_amiya",
+  "source": "https://prts.wiki",
+  "count": 38,
+  "voices": [
+    {
+      "id": 1,
+      "title": "任命助理",
+      "text_zh": "博士，您工作辛苦了。",
+      "trigger": "HOME_PLACE",
+      "voice_file": "CN_001.wav"
+    },
+    {
+      "id": 2,
+      "title": "交谈1",
+      "text_zh": "凯尔希医生教导过我，工作的时候一定要保持全神贯注……嗯，全神贯注。",
+      "trigger": "HOME_SHOW",
+      "voice_file": "CN_002.wav"
+    },
+    {
+      "id": 3,
+      "title": "交谈2",
+      "text_zh": "罗德岛全舰正处于通常航行状态。博士，整理下航程信息吧？",
+      "trigger": "HOME_SHOW",
+      "voice_file": "CN_003.wav"
+    },
+    {
+      "id": 4,
+      "title": "交谈3",
+      "text_zh": "作为罗德岛的领导者我还有很多不成熟的地方，希望您能更多地为我指明前进的方向。",
+      "trigger": "HOME_SHOW",
+      "voice_file": "CN_004.wav"
+    },
+    {
+      "id": 5,
+      "title": "晋升后交谈1",
+      "text_zh": "虽然这可能是我一厢情愿的想法，但我希望罗德岛能成为大家的第二个故乡……",
+      "trigger": "HOME_SHOW",
+      "voice_file": "CN_005.wav"
+    },
+    {
+      "id": 6,
+      "title": "晋升后交谈2",
+      "text_zh": "我们失去了很多才走到今天。有时候我会问自己，这一切真的值得么……？",
+      "trigger": "HOME_SHOW",
+      "voice_file": "CN_006.wav"
+    },
+    {
+      "id": 7,
+      "title": "信赖提升后交谈1",
+      "text_zh": "有时候，我会想起寒冷的家乡，那里就连空气中都弥漫着铜锈的味道。相比之下罗德岛是如此的温暖。所以，为了守护好这里，我必须更加努力才行。",
+      "trigger": "HOME_SHOW",
+      "voice_file": "CN_007.wav"
+    },
+    {
+      "id": 8,
+      "title": "信赖提升后交谈2",
+      "text_zh": "嘿嘿，，悄悄告诉你一件事——我重新开始练小提琴了。",
+      "trigger": "HOME_SHOW",
+      "voice_file": "CN_008.wav"
+    },
+    {
+      "id": 9,
+      "title": "信赖提升后交谈3",
+      "text_zh": "博士，我们的脚下，是一条漫长的道路……也许这是一次没有终点的旅行，但如果是和您一起，我觉得，非常幸福。",
+      "trigger": "HOME_SHOW",
+      "voice_file": "CN_009.wav"
+    },
+    {
+      "id": 10,
+      "title": "闲置",
+      "text_zh": "博士，您还有许多事情需要处理。现在还不能休息哦。",
+      "trigger": "HOME_WAIT",
+      "voice_file": "CN_010.wav"
+    },
+    {
+      "id": 11,
+      "title": "干员报到",
+      "text_zh": "博士，能再见到您……真是太好了。今后我们同行的路还很长，所以，请您多多关照！",
+      "trigger": "GACHA",
+      "voice_file": "CN_011.wav"
+    },
+    {
+      "id": 12,
+      "title": "观看作战记录",
+      "text_zh": "原来是这样……博士，谢谢您！这些指导，真的很有帮助！",
+      "trigger": "LEVEL_UP",
+      "voice_file": "CN_012.wav"
+    },
+    {
+      "id": 13,
+      "title": "精英化晋升1",
+      "text_zh": "能再一次和您并肩作战真是太好了，博士！",
+      "trigger": "EVOLVE_ONE",
+      "voice_file": "CN_013.wav"
+    },
+    {
+      "id": 14,
+      "title": "精英化晋升2",
+      "text_zh": "那一天所看到的光景，想要呐喊却无法发出声音的绝望……希望能把这些，永远藏在记忆的最深处……",
+      "trigger": "EVOLVE_TWO",
+      "voice_file": "CN_014.wav"
+    },
+    {
+      "id": 17,
+      "title": "编入队伍",
+      "text_zh": "嗯，我知道了。",
+      "trigger": "SQUAD",
+      "voice_file": "CN_017.wav"
+    },
+    {
+      "id": 18,
+      "title": "任命队长",
+      "text_zh": "我不会辜负大家的。",
+      "trigger": "SQUAD_FIRST",
+      "voice_file": "CN_018.wav"
+    },
+    {
+      "id": 19,
+      "title": "行动出发",
+      "text_zh": "行动开始！",
+      "trigger": "BATTLE_START",
+      "voice_file": "CN_019.wav"
+    },
+    {
+      "id": 20,
+      "title": "行动开始",
+      "text_zh": "来了！大家，请做好战斗准备！",
+      "trigger": "BATTLE_FACE_ENEMY",
+      "voice_file": "CN_020.wav"
+    },
+    {
+      "id": 21,
+      "title": "选中干员1",
+      "text_zh": "是。",
+      "trigger": "BATTLE_SELECT",
+      "voice_file": "CN_021.wav"
+    },
+    {
+      "id": 22,
+      "title": "选中干员2",
+      "text_zh": "博士，我在这里。",
+      "trigger": "BATTLE_SELECT",
+      "voice_file": "CN_022.wav"
+    },
+    {
+      "id": 23,
+      "title": "部署1",
+      "text_zh": "我知道了！",
+      "trigger": "BATTLE_PLACE",
+      "voice_file": "CN_023.wav"
+    },
+    {
+      "id": 24,
+      "title": "部署2",
+      "text_zh": "了解。",
+      "trigger": "BATTLE_PLACE",
+      "voice_file": "CN_024.wav"
+    },
+    {
+      "id": 25,
+      "title": "作战中1",
+      "text_zh": "我知道你在想什么。",
+      "trigger": "BATTLE_SKILL_1",
+      "voice_file": "CN_025.wav"
+    },
+    {
+      "id": 26,
+      "title": "作战中2",
+      "text_zh": "大家可都相信着我！",
+      "trigger": "BATTLE_SKILL_2",
+      "voice_file": "CN_026.wav"
+    },
+    {
+      "id": 27,
+      "title": "作战中3",
+      "text_zh": "你们在害怕我？",
+      "trigger": "BATTLE_SKILL_3",
+      "voice_file": "CN_027.wav"
+    },
+    {
+      "id": 28,
+      "title": "作战中4",
+      "text_zh": "这个声音在……哭？",
+      "trigger": "BATTLE_SKILL_4",
+      "voice_file": "CN_028.wav"
+    },
+    {
+      "id": 29,
+      "title": "完成高难行动",
+      "text_zh": "无论多么艰难的任务，只要有博士在，就一定能完成，我一直这样坚信着！",
+      "trigger": "FOUR_STAR",
+      "voice_file": "CN_029.wav"
+    },
+    {
+      "id": 30,
+      "title": "3星结束行动",
+      "text_zh": "即使是完美的胜利，大家也要保持警惕，不要太过放松哦！",
+      "trigger": "THREE_STAR",
+      "voice_file": "CN_030.wav"
+    },
+    {
+      "id": 31,
+      "title": "非3星结束行动",
+      "text_zh": "博士，辛苦了！累了的话请休息一会儿吧。",
+      "trigger": "TWO_STAR",
+      "voice_file": "CN_031.wav"
+    },
+    {
+      "id": 32,
+      "title": "行动失败",
+      "text_zh": "我没事的……大家，请振作起来！",
+      "trigger": "LOSE",
+      "voice_file": "CN_032.wav"
+    },
+    {
+      "id": 33,
+      "title": "进驻设施",
+      "text_zh": "有什么想喝的吗，博士？",
+      "trigger": "BUILDING_PLACE",
+      "voice_file": "CN_033.wav"
+    },
+    {
+      "id": 34,
+      "title": "戳一下",
+      "text_zh": "欸？博士？",
+      "trigger": "BUILDING_TOUCHING",
+      "voice_file": "CN_034.wav"
+    },
+    {
+      "id": 36,
+      "title": "信赖触摸",
+      "text_zh": "欸嘿嘿……",
+      "trigger": "BUILDING_FAVOR_BUBBLE",
+      "voice_file": "CN_036.wav"
+    },
+    {
+      "id": 37,
+      "title": "标题",
+      "text_zh": "明日方舟。",
+      "trigger": "LOADING_PANEL",
+      "voice_file": "CN_037.wav"
+    },
+    {
+      "id": 38,
+      "title": "新年祝福",
+      "text_zh": "新年快乐，博士！今天请您休息一下……抱、抱歉，您已经工作半天了吗？我是不是来晚了一点？刚刚煌把我叫去量身高了……您是在开玩笑啊，太好了。",
+      "trigger": "NEW_YEAR",
+      "voice_file": "CN_038.wav"
+    },
+    {
+      "id": 42,
+      "title": "问候",
+      "text_zh": "欢迎回家，博士！",
+      "trigger": "GREETING",
+      "voice_file": "CN_042.wav"
+    },
+    {
+      "id": 43,
+      "title": "生日",
+      "text_zh": "博士，如果过去的那些记忆，您还能回想起一些的话……我真的很高兴。嗯，我的小提琴还不够熟练，但是……既然这里只有您能听到，我想试着演奏一下。一首有些怀旧的曲子。",
+      "trigger": "BIRTHDAY",
+      "voice_file": "CN_043.wav"
+    },
+    {
+      "id": 44,
+      "title": "周年庆典",
+      "text_zh": "那些离去者的名字，我都记得，那些战场上的恐惧、愤怒和痛苦，我也仍然能触摸到余音。但要在大家面前演讲的话，我更想说些心怀希望的故事。博士，我有点紧张……可以握住我的手吗？",
+      "trigger": "ANNIVERSARY",
+      "voice_file": "CN_044.wav"
+    }
+  ]
+}

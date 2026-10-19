@@ -50,6 +50,9 @@
 /macos-controller/build/
 /macos-controller/DerivedData/
 /macos-controller/QQAgentController.bin
+*.pid
+*.app/
+**/download.log
 *.xcuserstate
 **/xcuserdata/
 .DS_Store

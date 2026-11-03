@@ -1,0 +1,1506 @@
+(() => {
+  'use strict';
+
+  // ============================================================
+  // 飞书会议文字记录提取器 V5
+  //
+  // 已验证的数据结构：
+  // 时间：.p-time[time-content]
+  // 姓名：发言头内部的文本、属性或 CSS 伪元素
+  // 正文：发言头的 nextElementSibling
+  //
+  // 功能：
+  // 1. DOM 结构化采集
+  // 2. 自动滚动
+  // 3. 手动定位
+  // 4. 捕获真实滚动
+  // 5. 虚拟列表累计采集
+  // 6. 去重与时间排序
+  // 7. TXT 导出
+  // 8. 停止、重启及生命周期清理
+  // ============================================================
+
+  const GLOBAL_KEY = '__FS_FINAL_EXTRACTOR__';
+  const PATCH_KEY = '__FS_DOM_COLLECTOR__';
+  const HUD_ID = '__fs_final_hud__';
+
+  const CONFIG = {
+    scrollRatio: 0.5,
+    scrollInterval: 700,
+    initialDelay: 900,
+    collectInterval: 350,
+    locateTimeoutMs: 20000
+  };
+
+  // ============================================================
+  // 1. 继承旧实例中的有效数据
+  // ============================================================
+
+  let inheritedScroll = null;
+  let inheritedRecords = [];
+
+  try {
+    inheritedScroll =
+      window[GLOBAL_KEY]?.getState?.()?.container || null;
+
+    inheritedRecords =
+      window[PATCH_KEY]?.getRecords?.() || [];
+  } catch (err) {
+    console.warn('[FS V5] 旧数据读取失败:', err);
+  }
+
+  // 先保存数据，再销毁旧实例
+  try {
+    if (typeof window[GLOBAL_KEY]?.destroy === 'function') {
+      window[GLOBAL_KEY].destroy();
+    } else {
+      window[GLOBAL_KEY]?.stop?.();
+    }
+
+    window[PATCH_KEY]?.destroy?.();
+  } catch (err) {
+    console.warn('[FS V5] 旧实例清理异常:', err);
+  }
+
+  document.getElementById(HUD_ID)?.remove();
+
+  const state = {
+    running: false,
+    destroyed: false,
+    runId: 0,
+
+    scrollContainer: null,
+
+    messages: new Map(),
+    sequence: 0,
+
+    scrollTimer: null,
+    collectTimer: null,
+
+    locatingCleanup: null,
+    pickingCleanup: null,
+
+    bottomSince: 0,
+    bottomFingerprint: '',
+
+    phase: 'IDLE'
+  };
+
+  // ============================================================
+  // 2. 基础工具
+  // ============================================================
+
+  const TIME_RE =
+    /^\d{1,2}:\d{2}(?::\d{2})?$/;
+
+  function clean(value) {
+    return String(value ?? '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/\u00A0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function textOf(element) {
+    if (!element) return '';
+
+    return clean(
+      element.innerText ||
+      element.textContent ||
+      ''
+    );
+  }
+
+  function getPseudoText(element) {
+    if (!element) return '';
+
+    try {
+      const value =
+        getComputedStyle(element, '::before').content;
+
+      if (
+        !value ||
+        value === 'none' ||
+        value === 'normal'
+      ) {
+        return '';
+      }
+
+      return clean(
+        value.replace(/^["']|["']$/g, '')
+      );
+    } catch {
+      return '';
+    }
+  }
+
+  function getScrollMax(element) {
+    if (!element) return 0;
+
+    return Math.max(
+      0,
+      element.scrollHeight - element.clientHeight
+    );
+  }
+
+  function elementLabel(element) {
+    if (!element) return '未绑定';
+
+    const tag =
+      element.tagName?.toLowerCase() || 'unknown';
+
+    const cls =
+      typeof element.className === 'string'
+        ? element.className.trim().split(/\s+/)[0]
+        : '';
+
+    return tag + (
+      cls ? '.' + cls.slice(0, 32) : ''
+    );
+  }
+
+  function toSeconds(value) {
+    const parts = value.split(':').map(Number);
+
+    return parts.reduce(
+      (total, part) => total * 60 + part,
+      0
+    );
+  }
+
+  function isValidTime(time) {
+    return TIME_RE.test(time);
+  }
+
+  function getParent(element) {
+    if (!element) return null;
+
+    if (element.parentElement) {
+      return element.parentElement;
+    }
+
+    const root = element.getRootNode?.();
+
+    if (
+      typeof ShadowRoot !== 'undefined' &&
+      root instanceof ShadowRoot
+    ) {
+      return root.host;
+    }
+
+    return null;
+  }
+
+  function getDocumentScroller() {
+    return (
+      document.scrollingElement ||
+      document.documentElement
+    );
+  }
+
+  // ============================================================
+  // 3. 创建统一 HUD
+  // ============================================================
+
+  const hud = document.createElement('div');
+
+  hud.id = HUD_ID;
+
+  Object.assign(hud.style, {
+    position: 'fixed',
+    right: '20px',
+    top: '20px',
+    width: '335px',
+    zIndex: '2147483647',
+    padding: '14px',
+    borderRadius: '10px',
+    background: '#1f2329',
+    color: '#ffffff',
+    fontFamily: 'system-ui, sans-serif',
+    fontSize: '12px',
+    lineHeight: '1.6',
+    boxShadow: '0 8px 28px rgba(0,0,0,.5)',
+    userSelect: 'none'
+  });
+
+  hud.innerHTML = `
+    <div style="
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin-bottom:12px;
+    ">
+      <strong style="font-size:14px">
+        📝 飞书文字记录提取器 V5
+      </strong>
+
+      <span id="fs_close" style="
+        cursor:pointer;
+        font-size:19px;
+        color:#94a3b8;
+      ">×</span>
+    </div>
+
+    <div style="
+      background:#0f172a;
+      border:1px solid #334155;
+      padding:10px;
+      border-radius:7px;
+      font:11px/1.8 monospace;
+      margin-bottom:12px;
+    ">
+      <div>状态：<span id="fs_phase">IDLE</span></div>
+      <div>容器：<span id="fs_container">未绑定</span></div>
+      <div>scrollTop：<span id="fs_scroll">-</span></div>
+      <div>滚动范围：<span id="fs_range">-</span></div>
+      <div>当前 DOM 发言：<span id="fs_visible">0</span></div>
+    </div>
+
+    <div style="
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin-bottom:12px;
+    ">
+      <span>累计采集</span>
+      <strong id="fs_count" style="
+        color:#34d399;
+        font-size:26px;
+      ">0</strong>
+    </div>
+
+    <div id="fs_status" style="
+      min-height:45px;
+      color:#cbd5e1;
+      margin-bottom:12px;
+      overflow-wrap:anywhere;
+    ">
+      正在初始化...
+    </div>
+
+    <button id="fs_start" style="
+      width:100%;
+      background:#2563eb;
+      color:white;
+      border:0;
+      border-radius:6px;
+      padding:10px;
+      font-weight:bold;
+      cursor:pointer;
+      margin-bottom:8px;
+    ">
+      🚀 持续滚动采集（手动停止）
+    </button>
+
+    <div style="
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:7px;
+    ">
+      <button id="fs_pick">🎯 点击文字定位</button>
+      <button id="fs_listen">🖱 捕获真实滚动</button>
+      <button id="fs_stop">⏹ 停止滚动</button>
+      <button id="fs_collect">📋 立即采集</button>
+      <button id="fs_export">💾 导出 TXT</button>
+      <button id="fs_clear">🗑 清空记录</button>
+    </div>
+
+    <div style="
+      color:#94a3b8;
+      font-size:10px;
+      margin-top:11px;
+    ">
+      时间戳从 time-content 读取。
+      已采集数量不等于后台完整记录总数。
+    </div>
+  `;
+
+  document.body.appendChild(hud);
+
+  const $ = id =>
+    hud.querySelector('#' + id);
+
+  const ui = {
+    phase: $('fs_phase'),
+    container: $('fs_container'),
+    scroll: $('fs_scroll'),
+    range: $('fs_range'),
+    visible: $('fs_visible'),
+    count: $('fs_count'),
+    status: $('fs_status'),
+
+    start: $('fs_start'),
+    pick: $('fs_pick'),
+    listen: $('fs_listen'),
+    stop: $('fs_stop'),
+    collect: $('fs_collect'),
+    export: $('fs_export'),
+    clear: $('fs_clear'),
+    close: $('fs_close')
+  };
+
+  const buttons = [
+    ui.pick,
+    ui.listen,
+    ui.stop,
+    ui.collect,
+    ui.export,
+    ui.clear
+  ];
+
+  buttons.forEach(button => {
+    Object.assign(button.style, {
+      border: 'none',
+      borderRadius: '6px',
+      padding: '8px 4px',
+      background: '#475569',
+      color: '#fff',
+      cursor: 'pointer',
+      fontSize: '11px'
+    });
+  });
+
+  ui.stop.style.background = '#b91c1c';
+  ui.export.style.background = '#0f766e';
+  ui.clear.style.background = '#7c2d12';
+  ui.stop.disabled = true;
+
+  function setPhase(phase, message) {
+    state.phase = phase;
+    ui.phase.textContent = phase;
+
+    if (message !== undefined) {
+      ui.status.textContent = message;
+    }
+  }
+
+  function updateDiagnostic(before, after) {
+    const c = state.scrollContainer;
+
+    if (!c) {
+      ui.container.textContent = '未绑定';
+      ui.scroll.textContent = '-';
+      ui.range.textContent = '-';
+      return;
+    }
+
+    ui.container.textContent =
+      elementLabel(c);
+
+    ui.range.textContent =
+      Math.round(getScrollMax(c));
+
+    if (
+      before !== undefined &&
+      after !== undefined
+    ) {
+      ui.scroll.textContent =
+        `${Math.round(before)} → ${Math.round(after)}`;
+    } else {
+      ui.scroll.textContent =
+        Math.round(c.scrollTop);
+    }
+  }
+
+  // ============================================================
+  // 4. 发言人提取
+  //
+  // 保留已验证成功的 V4 补丁规则。
+  // 不猜测未知姓名。
+  // ============================================================
+
+  function getSpeaker(timeElement) {
+    const header = timeElement.parentElement;
+
+    if (!header) {
+      return '未识别发言人';
+    }
+
+    const candidates = [
+      header,
+      ...header.querySelectorAll('*')
+    ].filter(element =>
+      element !== timeElement &&
+      !timeElement.contains(element) &&
+      !element.contains(timeElement)
+    );
+
+    candidates.sort((a, b) => {
+      const rank = element =>
+        /username|user-name|speaker|nickname|p-name/i
+          .test(String(element.className || ''))
+          ? 0
+          : 1;
+
+      return rank(a) - rank(b);
+    });
+
+    const time =
+      timeElement.getAttribute('time-content');
+
+    const attributeNames = [
+      'user-content',
+      'username',
+      'name-content',
+      'data-username',
+      'data-speaker',
+      'aria-label',
+      'title'
+    ];
+
+    for (const element of candidates) {
+      const values = [
+        clean(element.textContent),
+        getPseudoText(element),
+        ...attributeNames.map(name =>
+          clean(element.getAttribute(name))
+        )
+      ];
+
+      for (const value of values) {
+        if (!value) continue;
+        if (value === time) continue;
+        if (value.length > 80) continue;
+        if (isValidTime(value)) continue;
+
+        return value;
+      }
+    }
+
+    return '未识别发言人';
+  }
+
+  // ============================================================
+  // 5. 正文提取
+  //
+  // 已验证：
+  // .p-time 的父节点是发言头；
+  // 发言头的 nextElementSibling 对应正文。
+  // ============================================================
+
+  function getContent(timeElement) {
+    const header = timeElement.parentElement;
+
+    if (!header) return '';
+
+    const body = header.nextElementSibling;
+
+    if (!body) return '';
+
+    return clean(
+      body.innerText ||
+      body.textContent ||
+      ''
+    );
+  }
+
+  // ============================================================
+  // 6. 单条发言
+  // ============================================================
+
+  function parseMessage(timeElement) {
+    const time = clean(
+      timeElement.getAttribute('time-content')
+    );
+
+    if (!isValidTime(time)) {
+      return null;
+    }
+
+    const speaker = getSpeaker(timeElement);
+    const content = getContent(timeElement);
+
+    if (!content) {
+      return null;
+    }
+
+    return {
+      time,
+      speaker,
+      content
+    };
+  }
+
+  function makeRecordKey(record) {
+    return [
+      record.time,
+      record.speaker,
+      record.content
+    ].join('\u0001');
+  }
+
+  function addRecord(record) {
+    const key = makeRecordKey(record);
+
+    if (state.messages.has(key)) {
+      return false;
+    }
+
+    state.messages.set(key, {
+      sequence: state.sequence++,
+      ...record
+    });
+
+    return true;
+  }
+
+  // ============================================================
+  // 7. 实时采集
+  //
+  // 直接从已验证的 DOM 读取。
+  // 不依赖 innerText 中出现时间戳。
+  // ============================================================
+
+  function collectCurrent() {
+    if (state.destroyed) {
+      return 0;
+    }
+
+    const timeElements =
+      document.querySelectorAll(
+        '.p-time[time-content]'
+      );
+
+    let added = 0;
+
+    for (const element of timeElements) {
+      if (!element.isConnected) continue;
+
+      const record = parseMessage(element);
+
+      if (!record) continue;
+
+      if (addRecord(record)) {
+        added++;
+      }
+    }
+
+    ui.count.textContent =
+      state.messages.size;
+
+    ui.visible.textContent =
+      timeElements.length;
+
+    if (added > 0) {
+      console.log(
+        `[FS V5] 本次新增 ${added} 条，累计 ${state.messages.size} 条`
+      );
+    }
+
+    return added;
+  }
+
+  // ============================================================
+  // 8. 恢复此前补丁采集的数据
+  // ============================================================
+
+  for (const record of inheritedRecords) {
+    if (
+      record &&
+      record.time &&
+      record.content
+    ) {
+      addRecord({
+        time: clean(record.time),
+        speaker: clean(
+          record.speaker || '未识别发言人'
+        ),
+        content: clean(record.content)
+      });
+    }
+  }
+
+  // ============================================================
+  // 9. 滚动容器定位
+  // ============================================================
+
+  function probeScrollable(element) {
+    if (!(element instanceof Element)) {
+      return false;
+    }
+
+    if (!element.isConnected) {
+      return false;
+    }
+
+    if (
+      element === hud ||
+      hud.contains(element)
+    ) {
+      return false;
+    }
+
+    const max = getScrollMax(element);
+
+    if (max <= 8) {
+      return false;
+    }
+
+    const original = element.scrollTop;
+
+    try {
+      const target =
+        original < max - 2
+          ? original + 2
+          : Math.max(0, original - 2);
+
+      element.scrollTop = target;
+
+      const moved =
+        Math.abs(element.scrollTop - original) > 0.1;
+
+      element.scrollTop = original;
+
+      return moved;
+    } catch {
+      return false;
+    }
+  }
+
+  function getScrollableAncestor(element) {
+    let current = element;
+
+    while (current) {
+      if (probeScrollable(current)) {
+        return current;
+      }
+
+      current = getParent(current);
+    }
+
+    const root = getDocumentScroller();
+
+    return probeScrollable(root)
+      ? root
+      : null;
+  }
+
+  function autoFindScrollContainer() {
+    const timeElements =
+      document.querySelectorAll(
+        '.p-time[time-content]'
+      );
+
+    const candidates = new Map();
+
+    for (
+      const timeElement of [...timeElements].slice(0, 20)
+    ) {
+      let current = timeElement.parentElement;
+
+      while (current) {
+        if (probeScrollable(current)) {
+          const old = candidates.get(current) || 0;
+
+          candidates.set(
+            current,
+            old + 1
+          );
+        }
+
+        current = getParent(current);
+      }
+    }
+
+    const ranked = [...candidates.entries()]
+      .map(([element, hits]) => {
+        const rect =
+          element.getBoundingClientRect();
+
+        let score = hits * 10;
+
+        if (rect.width > 180) {
+          score += 2;
+        }
+
+        if (rect.height > 180) {
+          score += 2;
+        }
+
+        if (rect.left > window.innerWidth * 0.25) {
+          score += 3;
+        }
+
+        if (element === getDocumentScroller()) {
+          score -= 10;
+        }
+
+        return {
+          element,
+          score
+        };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    return ranked[0]?.element || null;
+  }
+
+  function bindScrollContainer(element, source) {
+    if (!probeScrollable(element)) {
+      return false;
+    }
+
+    state.scrollContainer = element;
+
+    updateDiagnostic();
+
+    setPhase(
+      'READY',
+      `✅ 已通过${source}定位滚动容器：${elementLabel(element)}`
+    );
+
+    return true;
+  }
+
+  // ============================================================
+  // 10. 真实滚动捕获
+  // ============================================================
+
+  function stopLocating() {
+    state.locatingCleanup?.();
+    state.locatingCleanup = null;
+  }
+
+  function beginRealScrollCapture() {
+    stopLocating();
+
+    setPhase(
+      'LOCATING',
+      '请在右侧文字记录区域正常滚动一次。'
+    );
+
+    let lastWheel = null;
+
+    const onWheel = event => {
+      if (hud.contains(event.target)) {
+        return;
+      }
+
+      lastWheel = {
+        target: event.target,
+        x: event.clientX,
+        y: event.clientY,
+        at: Date.now()
+      };
+    };
+
+    const onScroll = event => {
+      if (!lastWheel) return;
+
+      if (
+        Date.now() - lastWheel.at > 1500
+      ) {
+        return;
+      }
+
+      let element = event.target;
+
+      if (element === document) {
+        element = getDocumentScroller();
+      }
+
+      if (!(element instanceof Element)) {
+        return;
+      }
+
+      if (
+        element === hud ||
+        hud.contains(element)
+      ) {
+        return;
+      }
+
+      const rect =
+        element.getBoundingClientRect();
+
+      const wheelInside =
+        lastWheel.x >= rect.left &&
+        lastWheel.x <= rect.right &&
+        lastWheel.y >= rect.top &&
+        lastWheel.y <= rect.bottom;
+
+      const related =
+        element.contains(lastWheel.target) ||
+        wheelInside;
+
+      if (!related) return;
+
+      // 页面必须存在已确认的飞书记录结构
+      if (
+        !document.querySelector(
+          '.p-time[time-content]'
+        )
+      ) {
+        return;
+      }
+
+      if (!probeScrollable(element)) {
+        return;
+      }
+
+      stopLocating();
+
+      bindScrollContainer(
+        element,
+        '真实滚动'
+      );
+    };
+
+    document.addEventListener(
+      'wheel',
+      onWheel,
+      { passive: true, capture: true }
+    );
+
+    document.addEventListener(
+      'scroll',
+      onScroll,
+      true
+    );
+
+    const timeout = setTimeout(() => {
+      stopLocating();
+
+      if (state.phase === 'LOCATING') {
+        setPhase(
+          'STALLED',
+          '未捕获有效滚动。请检查文字记录是否仍处于当前页面。'
+        );
+      }
+    }, CONFIG.locateTimeoutMs);
+
+    state.locatingCleanup = () => {
+      document.removeEventListener(
+        'wheel',
+        onWheel,
+        true
+      );
+
+      document.removeEventListener(
+        'scroll',
+        onScroll,
+        true
+      );
+
+      clearTimeout(timeout);
+    };
+  }
+
+  // ============================================================
+  // 11. 手动点击定位
+  // ============================================================
+
+  function stopPicking() {
+    state.pickingCleanup?.();
+    state.pickingCleanup = null;
+  }
+
+  function beginPick() {
+    stopScroll();
+    stopLocating();
+    stopPicking();
+
+    setPhase(
+      'PICKING',
+      '请点击右侧一条发言正文。'
+    );
+
+    const onClick = event => {
+      const target = event.target;
+
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      if (hud.contains(target)) {
+        return;
+      }
+
+      stopPicking();
+
+      const container =
+        getScrollableAncestor(target);
+
+      if (
+        container &&
+        bindScrollContainer(
+          container,
+          '手动点击'
+        )
+      ) {
+        return;
+      }
+
+      beginRealScrollCapture();
+    };
+
+    document.addEventListener(
+      'click',
+      onClick,
+      true
+    );
+
+    state.pickingCleanup = () => {
+      document.removeEventListener(
+        'click',
+        onClick,
+        true
+      );
+    };
+  }
+
+  // ============================================================
+  // 12. 当前渲染记录指纹
+  //
+  // 用于判断虚拟列表是否发生推进。
+  // ============================================================
+
+  function currentFingerprint() {
+    const elements = [
+      ...document.querySelectorAll(
+        '.p-time[time-content]'
+      )
+    ];
+
+    const times = elements.map(element =>
+      clean(element.getAttribute('time-content'))
+    );
+
+    return [
+      times.length,
+      times.slice(0, 3).join(','),
+      times.slice(-3).join(','),
+      state.messages.size
+    ].join('|');
+  }
+
+  // ============================================================
+  // 13. 滚动任务管理
+  // ============================================================
+
+  function clearScrollTimer() {
+    if (state.scrollTimer !== null) {
+      clearTimeout(state.scrollTimer);
+      state.scrollTimer = null;
+    }
+  }
+
+  function scheduleScroll(runId, delay) {
+    clearScrollTimer();
+
+    state.scrollTimer = setTimeout(() => {
+      state.scrollTimer = null;
+
+      if (!state.running) return;
+      if (runId !== state.runId) return;
+      if (state.destroyed) return;
+
+      scrollStep(runId);
+    }, delay);
+  }
+
+  function stopScroll(message = '已停止自动滚动') {
+    state.running = false;
+    state.runId++;
+
+    clearScrollTimer();
+
+    ui.start.disabled = false;
+    ui.stop.disabled = true;
+
+    if (
+      state.phase === 'SCROLLING' ||
+      state.phase === 'WAITING_CONTENT'
+    ) {
+      setPhase('STOPPED', message);
+    }
+  }
+
+  // ============================================================
+  // 14. 自动滚动主循环
+  // ============================================================
+
+  function scrollStep(runId) {
+    if (!state.running) return;
+    if (runId !== state.runId) return;
+
+    const container = state.scrollContainer;
+
+    if (
+      !container ||
+      !container.isConnected
+    ) {
+      stopScroll();
+
+      setPhase(
+        'STALLED',
+        '滚动容器已失效，请重新定位。'
+      );
+
+      return;
+    }
+
+    // 先采集当前 DOM
+    collectCurrent();
+
+    const before = container.scrollTop;
+    const max = getScrollMax(container);
+
+    const step = Math.max(
+      80,
+      Math.floor(
+        container.clientHeight *
+        CONFIG.scrollRatio
+      )
+    );
+
+    // 唯一滚动操作
+    container.scrollTop = Math.min(
+      max,
+      before + step
+    );
+
+    const after = container.scrollTop;
+
+    updateDiagnostic(before, after);
+
+    // 给虚拟列表一小段渲染时间
+    state.scrollTimer = setTimeout(() => {
+      state.scrollTimer = null;
+
+      if (!state.running) return;
+      if (runId !== state.runId) return;
+
+      collectCurrent();
+
+      const afterFingerprint =
+        currentFingerprint();
+
+      const moved =
+        Math.abs(after - before) > 0.5;
+
+      const atBottom =
+        container.scrollTop >=
+        getScrollMax(container) - 4;
+
+      // --------------------------------------
+      // 正常滚动
+      // --------------------------------------
+
+      if (moved) {
+        state.bottomSince = 0;
+        state.bottomFingerprint = '';
+
+        setPhase(
+          'SCROLLING',
+          `正在滚动采集：累计 ${state.messages.size} 条；scrollTop ${Math.round(before)} → ${Math.round(after)}。`
+        );
+
+        scheduleScroll(
+          runId,
+          CONFIG.scrollInterval - 180
+        );
+
+        return;
+      }
+
+      // --------------------------------------
+      // 无法滚动且未到底
+      // --------------------------------------
+
+      if (!atBottom) {
+        setPhase(
+          'WAITING_CONTENT',
+          '暂未产生有效位移，将持续重试；可手动重新定位或点击「停止滚动」。'
+        );
+
+        scheduleScroll(runId, CONFIG.scrollInterval);
+
+        return;
+      }
+
+      // --------------------------------------
+      // 到达当前底部
+      // --------------------------------------
+
+      const fingerprint = [
+        Math.round(container.scrollHeight),
+        afterFingerprint
+      ].join('|');
+
+      if (
+        fingerprint !==
+        state.bottomFingerprint
+      ) {
+        state.bottomFingerprint =
+          fingerprint;
+
+        state.bottomSince =
+          Date.now();
+      }
+
+      const waited =
+        Date.now() - state.bottomSince;
+
+      setPhase(
+        'WAITING_CONTENT',
+        `已到当前列表底部，等待异步内容：${Math.round(waited / 1000)} 秒。累计 ${state.messages.size} 条；将持续等待，点击「停止滚动」结束。`
+      );
+
+      scheduleScroll(
+        runId,
+        CONFIG.scrollInterval
+      );
+
+    }, 180);
+  }
+
+  // ============================================================
+  // 15. 启动自动滚动
+  // ============================================================
+
+  function startScroll() {
+    stopPicking();
+    stopLocating();
+
+    let container =
+      state.scrollContainer;
+
+    if (
+      !container ||
+      !probeScrollable(container)
+    ) {
+      container =
+        autoFindScrollContainer();
+    }
+
+    if (!container) {
+      setPhase(
+        'STALLED',
+        '未找到可靠滚动容器，请点击「🎯 点击文字定位」或「🖱 捕获真实滚动」。'
+      );
+
+      return;
+    }
+
+    stopScroll();
+
+    state.scrollContainer = container;
+
+    state.running = true;
+    state.runId++;
+
+    const runId = state.runId;
+
+    state.bottomSince = 0;
+    state.bottomFingerprint = '';
+
+    ui.start.disabled = true;
+    ui.stop.disabled = false;
+
+    // 从当前列表顶部开始
+    container.scrollTop = 0;
+
+    updateDiagnostic();
+
+    collectCurrent();
+
+    setPhase(
+      'SCROLLING',
+      '正在从列表顶部开始持续采集，点击「停止滚动」结束。'
+    );
+
+    scheduleScroll(
+      runId,
+      CONFIG.initialDelay
+    );
+  }
+
+  // ============================================================
+  // 16. TXT 导出
+  // ============================================================
+
+  function downloadText(text, filename) {
+    const blob = new Blob(
+      [text],
+      {
+        type: 'text/plain;charset=utf-8'
+      }
+    );
+
+    const url =
+      URL.createObjectURL(blob);
+
+    const link =
+      document.createElement('a');
+
+    link.href = url;
+    link.download = filename;
+
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 1000);
+  }
+
+  function exportTxt() {
+    collectCurrent();
+
+    if (
+      state.messages.size === 0
+    ) {
+      alert('当前还没有采集到发言记录。');
+      return;
+    }
+
+    const records = [
+      ...state.messages.values()
+    ].sort((a, b) =>
+      toSeconds(a.time) -
+      toSeconds(b.time) ||
+      a.sequence - b.sequence
+    );
+
+    const header = [
+      '========================================',
+      '飞书会议文字记录',
+      `导出时间：${new Date().toLocaleString()}`,
+      `累计采集：${records.length} 条`,
+      `采集状态：${state.phase}`,
+      '注意：未验证是否包含后台全部会议记录。',
+      '========================================',
+      ''
+    ].join('\n');
+
+    const body = records.map(record =>
+      `[${record.time}] ${record.speaker}：${record.content}`
+    ).join('\n\n');
+
+    downloadText(
+      header + body,
+      `飞书会议文字记录_${Date.now()}.txt`
+    );
+  }
+
+  // ============================================================
+  // 17. 事件绑定
+  // ============================================================
+
+  ui.start.addEventListener(
+    'click',
+    startScroll
+  );
+
+  ui.stop.addEventListener(
+    'click',
+    () => {
+      stopScroll();
+      stopLocating();
+      stopPicking();
+    }
+  );
+
+  ui.pick.addEventListener(
+    'click',
+    beginPick
+  );
+
+  ui.listen.addEventListener(
+    'click',
+    () => {
+      stopScroll();
+      stopPicking();
+      beginRealScrollCapture();
+    }
+  );
+
+  ui.collect.addEventListener(
+    'click',
+    () => {
+      const added = collectCurrent();
+
+      setPhase(
+        state.running ? 'SCROLLING' : 'READY',
+        `📋 本次新增 ${added} 条，累计 ${state.messages.size} 条。`
+      );
+    }
+  );
+
+  ui.export.addEventListener(
+    'click',
+    exportTxt
+  );
+
+  ui.clear.addEventListener(
+    'click',
+    () => {
+      if (
+        !confirm(
+          '确定清空已采集记录吗？此操作不会删除飞书中的会议内容。'
+        )
+      ) {
+        return;
+      }
+
+      state.messages.clear();
+      state.sequence = 0;
+
+      ui.count.textContent = '0';
+
+      setPhase(
+        state.running ? 'SCROLLING' : 'READY',
+        '已清空本地采集记录。'
+      );
+    }
+  );
+
+  // ============================================================
+  // 18. 生命周期
+  // ============================================================
+
+  function destroy() {
+    if (state.destroyed) return;
+
+    stopScroll();
+    stopLocating();
+    stopPicking();
+
+    if (
+      state.collectTimer !== null
+    ) {
+      clearInterval(
+        state.collectTimer
+      );
+
+      state.collectTimer = null;
+    }
+
+    state.destroyed = true;
+
+    hud.remove();
+
+    if (
+      window[GLOBAL_KEY]?.destroy === destroy
+    ) {
+      delete window[GLOBAL_KEY];
+    }
+  }
+
+  ui.close.addEventListener(
+    'click',
+    destroy
+  );
+
+  // ============================================================
+  // 19. 对外调试 API
+  // ============================================================
+
+  window[GLOBAL_KEY] = {
+    destroy,
+
+    stop: stopScroll,
+
+    collect: collectCurrent,
+
+    exportTxt,
+
+    getRecords() {
+      return [
+        ...state.messages.values()
+      ];
+    },
+
+    getState() {
+      const c =
+        state.scrollContainer;
+
+      return {
+        phase: state.phase,
+        running: state.running,
+
+        messageCount:
+          state.messages.size,
+
+        visibleTimeNodes:
+          document.querySelectorAll(
+            '.p-time[time-content]'
+          ).length,
+
+        container: c,
+
+        scrollTop:
+          c?.scrollTop ?? null,
+
+        scrollHeight:
+          c?.scrollHeight ?? null,
+
+        clientHeight:
+          c?.clientHeight ?? null
+      };
+    }
+  };
+
+  // ============================================================
+  // 20. 初始化
+  // ============================================================
+
+  // 优先继承此前已经验证能够正常滚动的容器
+  if (
+    inheritedScroll &&
+    probeScrollable(inheritedScroll)
+  ) {
+    state.scrollContainer =
+      inheritedScroll;
+  } else {
+    state.scrollContainer =
+      autoFindScrollContainer();
+  }
+
+  // 初始化 DOM 采集
+  const initialAdded =
+    collectCurrent();
+
+  updateDiagnostic();
+
+  if (state.scrollContainer) {
+    setPhase(
+      'READY',
+      `✅ 已识别 ${initialAdded} 条新发言，累计 ${state.messages.size} 条。滚动容器已绑定。`
+    );
+  } else {
+    setPhase(
+      'READY',
+      `✅ 当前累计 ${state.messages.size} 条记录。尚未绑定滚动容器，可先手动定位。`
+    );
+  }
+
+  // 持续采集当前 DOM，包括虚拟列表异步渲染
+  state.collectTimer = setInterval(
+    collectCurrent,
+    CONFIG.collectInterval
+  );
+
+  console.log(
+    '%c[FS V5] 完整整合版已启动',
+    'color:#10b981;font-weight:bold;font-size:14px'
+  );
+
+  console.log(
+    '[FS V5] 当前累计记录:',
+    state.messages.size
+  );
+
+  console.table(
+    [
+      ...state.messages.values()
+    ].slice(0, 10)
+  );
+
+  console.log(
+    '[FS V5] 调试接口：window.__FS_FINAL_EXTRACTOR__'
+  );
+
+})();

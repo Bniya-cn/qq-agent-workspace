@@ -22,7 +22,7 @@ import os
 import random
 import wave
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 BOT_ROOT = Path(__file__).resolve().parents[3]
 WORKSPACE_ROOT = BOT_ROOT.parent
@@ -221,22 +221,43 @@ def wav_bytes_to_silk_bytes(
 
 
 def analyze_wav_acoustics(wav_bytes: bytes) -> dict[str, Any]:
-    """分析 WAV 基础声学特征。"""
+    """分析 WAV 基础声学特征（实测时长、自相关中位基频 median_f0_hz 与平均过零率 avg_zcr_hz）。"""
     try:
         with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
             fr = wf.getframerate()
             nf = wf.getnframes()
+            ch = wf.getnchannels()
             dur = round(nf / float(max(1, fr)), 3)
             raw = wf.readframes(nf)
-            arr = array.array("h")
-            arr.frombytes(raw)
-            if not arr:
-                return {"duration_sec": dur, "median_f0_hz": 300.0, "avg_zcr_hz": 1200.0}
-            zcr = sum(1 for i in range(len(arr) - 1) if (arr[i] >= 0 > arr[i + 1]) or (arr[i] < 0 <= arr[i + 1]))
-            zcr_hz = round((zcr / max(1e-3, dur)) / 2.0, 1)
-            return {"duration_sec": dur, "median_f0_hz": 300.0, "avg_zcr_hz": zcr_hz}
+        arr = array.array("h")
+        arr.frombytes(raw)
+        if ch > 1:
+            arr = arr[::ch]
+        if not arr or fr <= 0:
+            return {"duration_sec": dur, "median_f0_hz": 280.0, "avg_zcr_hz": 900.0}
+        zcr = sum(1 for i in range(len(arr) - 1) if (arr[i] >= 0 > arr[i + 1]) or (arr[i] < 0 <= arr[i + 1]))
+        zcr_hz = round((zcr / max(1e-3, dur)) / 2.0, 1)
+        flen = max(64, int(fr * 0.024))
+        f0s: list[float] = []
+        min_l, max_l = max(1, int(fr / 580.0)), max(2, int(fr / 160.0))
+        step = max(flen, len(arr) // 24)
+        for st in range(0, max(1, len(arr) - flen), step):
+            seg = arr[st : st + flen]
+            e0 = sum(float(seg[k]) * float(seg[k]) for k in range(0, flen, 6))
+            if e0 < 1e6 * (flen / 6.0):
+                continue
+            best_l, best_c = 0, -1e18
+            for l in range(min_l, min(max_l, flen - 2), 2):
+                c = sum(float(seg[k]) * float(seg[k + l]) for k in range(0, flen - l, 6))
+                if c > best_c:
+                    best_c, best_l = c, l
+            if best_l > 0 and best_c > 0.38 * e0:
+                f0s.append(fr / float(best_l))
+        f0s.sort()
+        med_f0 = round(f0s[len(f0s) // 2], 1) if f0s else 280.0
+        return {"duration_sec": dur, "median_f0_hz": med_f0, "avg_zcr_hz": zcr_hz}
     except Exception:
-        return {"duration_sec": 1.0, "median_f0_hz": 300.0, "avg_zcr_hz": 1200.0}
+        return {"duration_sec": 1.0, "median_f0_hz": 280.0, "avg_zcr_hz": 900.0}
 
 
 def build_whimper_unit_specs(raw_text: str, role: str = "", num_units: int = 2, variant: str = "A") -> list[dict[str, Any]]:
@@ -250,26 +271,71 @@ def build_whimper_unit_specs(raw_text: str, role: str = "", num_units: int = 2, 
     return specs
 
 
-def shape_whimper_unit_pcm(wav_bytes: bytes, **kwargs) -> tuple[array.array, int, dict[str, Any]]:
-    """塑形单元 PCM。"""
-    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
-        sr = wf.getframerate()
-        raw = wf.readframes(wf.getnframes())
+def shape_whimper_unit_pcm(
+    wav_bytes: bytes,
+    *,
+    style: str = "protest",
+    min_sec: float = 1.0,
+    max_sec: float = 1.6,
+    target_sec: float = 1.25,
+    base_f0: float = 280.0,
+    mark_offset_ratio: float = 0.0,
+    pitch_undulation: float = 1.0,
+    **kwargs: Any,
+) -> tuple[array.array, int, dict[str, Any]]:
+    """对单单元 WAV 做前导静音剥离与首尾 10ms 平滑淡入淡出（不引入旧版失败的颗粒重排或人工气声），保持 tts_service 调用契约。"""
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+            ch = wf.getnchannels()
+            sr = wf.getframerate()
+            raw = wf.readframes(wf.getnframes())
+    except Exception:
+        return array.array("h"), 32000, {"shaped_duration_sec": 0.0, "median_f0_hz": base_f0, "avg_zcr_hz": 900.0}
+
     arr = array.array("h")
     arr.frombytes(raw)
-    dur = round(len(arr) / float(max(1, sr)), 3)
-    meta = {"shaped_duration_sec": dur, "median_f0_hz": 290.0, "avg_zcr_hz": 1400.0}
+    if ch > 1:
+        arr = arr[::ch]
+    if not arr or sr <= 0:
+        return array.array("h"), max(1, sr), {"shaped_duration_sec": 0.0, "median_f0_hz": base_f0, "avg_zcr_hz": 900.0}
+
+    arr = _compact_gagged_silence(arr, sr)
+    max_samples = int(sr * max(0.5, max_sec))
+    if len(arr) > max_samples:
+        arr = arr[:max_samples]
+
+    fade_n = min(int(sr * 0.010), len(arr) // 4)
+    for k in range(fade_n):
+        w = float(k) / float(max(1, fade_n))
+        arr[k] = int(round(arr[k] * w))
+        arr[len(arr) - 1 - k] = int(round(arr[len(arr) - 1 - k] * w))
+
+    ac = analyze_wav_acoustics(wav_bytes)
+    dur = round(len(arr) / float(sr), 3)
+    meta = {
+        "shaped_duration_sec": dur,
+        "median_f0_hz": ac.get("median_f0_hz", base_f0),
+        "avg_zcr_hz": ac.get("avg_zcr_hz", 900.0),
+    }
     return arr, sr, meta
 
 
-def join_whimper_units_to_wav(pcms: list[array.array], sr: int = 32000, pause_sec: float = 0.20) -> bytes:
-    """把多个单元 PCM 拼接为完整 WAV。"""
+def join_whimper_units_to_wav(
+    pcms: list[array.array],
+    sr: int = 32000,
+    pause_sec: float = 0.20,
+    pause_durations: Optional[list[float]] = None,
+) -> bytes:
+    """把多个单元 PCM 拼接为完整 WAV，兼容 pause_durations 列表与单一 pause_sec 参数。"""
     out = array.array("h")
-    pause = array.array("h", [0] * int(sr * pause_sec))
     for idx, pcm in enumerate(pcms):
         out.extend(pcm)
         if idx < len(pcms) - 1:
-            out.extend(pause)
+            if pause_durations and idx < len(pause_durations):
+                p_sec = max(0.0, float(pause_durations[idx]))
+            else:
+                p_sec = max(0.0, float(pause_sec))
+            out.extend(array.array("h", [0] * int(sr * p_sec)))
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)

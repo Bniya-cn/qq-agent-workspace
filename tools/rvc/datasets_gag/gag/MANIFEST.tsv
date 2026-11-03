@@ -1,0 +1,7 @@
+file	origin_path	duration_s	description
+gag_00.wav	/Users/daijinglin/Desktop/qq-agent-workspace/bot/data/test_output/exp_gagged_v2/src_nospeech/gagged_1_bs_vocals_nospeech.wav	5.49	gg-test gagged_1 (BS-RoFormer vocals, spoken lines removed)
+gag_01.wav	/Users/daijinglin/Desktop/qq-agent-workspace/bot/data/test_output/exp_gagged_v2/src_nospeech/gagged_2_bs_vocals_nospeech.wav	4.57	gg-test gagged_2 (BS-RoFormer vocals, spoken lines removed)
+gag_02.wav	/Users/daijinglin/Desktop/qq-agent-workspace/gg-test/wav/gagged_3.wav	2.69	gg-test ORIGINAL gagged_3.wav (user: nospeech g3 removal too poor; read-only copy)
+gag_03.wav	/Users/daijinglin/Desktop/qq-agent-workspace/tools/rvc/data_raw/gag_cc0/ghostly_humming.ogg	66.84	OpenGameArt 'Ghostly Humming' by Nocturnal_Vanguard, CC0
+# Rebuilt per user correction: g1+g2+g3 all included, g3 = original gg-test/wav/gagged_3.wav (no nospeech g3). Previous gag set (g2+g3_nospeech_v2+humming) was discarded before training.
+# This muffled set is ONLY for the separate 'gag_rvc' texture model; never mixed into amiya/dania identity datasets. No character voice, no TTS.

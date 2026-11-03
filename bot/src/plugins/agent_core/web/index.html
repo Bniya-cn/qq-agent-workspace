@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PRTS // QQ Agent 双模控制中枢</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/panel-assets/theme.js"></script>
+  <link rel="stylesheet" href="/panel-assets/panel.css">
+</head>
+<body data-workspace="bot" class="min-h-screen antialiased selection:bg-sky-500/30 selection:text-sky-200">
+
+  <!-- 顶部导航栏：宽屏保持单行布局，窄屏自动换行重排且按钮不重叠 -->
+  <header class="sticky top-0 z-30 min-h-[68px] py-2 border-b border-surface-700/80 bg-surface-950/90 backdrop-blur-md px-3 sm:px-6 flex flex-wrap items-center justify-between gap-2.5">
+    <div class="flex items-center gap-3 min-w-0">
+      <div class="w-9 h-9 shrink-0 rounded-xl accent-pill flex items-center justify-center font-mono font-semibold text-sm">
+        PRTS
+      </div>
+      <div class="min-w-0">
+        <div class="flex flex-wrap items-center gap-2">
+          <h1 class="text-sm sm:text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">QQ Agent 战术控制中枢</h1>
+          <span id="header-conn-badge" class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 whitespace-nowrap">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            8080 ONLINE
+          </span>
+        </div>
+        <p class="text-[11px] sm:text-xs text-slate-400 font-mono truncate" id="header-sub-status">Bot: 1412773476 · 直连百炼与 GPT-SoVITS</p>
+      </div>
+    </div>
+
+    <!-- 核心双模式切换器：严格区分「机器人模式」与「语音模式」 -->
+    <div class="flex items-center bg-surface-900 p-1 rounded-xl border border-surface-700 shrink-0">
+      <button id="tab-btn-bot" onclick="switchWorkspace('bot')" class="tactile-btn px-3 sm:px-4 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 bg-sky-500 text-slate-950 shadow-sm whitespace-nowrap">
+        <span>🤖 机器人模式</span>
+        <span class="font-mono text-[10px] opacity-80 hidden sm:inline">AGENT</span>
+      </button>
+      <button id="tab-btn-voice" onclick="switchWorkspace('voice')" class="tactile-btn px-3 sm:px-4 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 text-slate-400 hover:text-slate-200 whitespace-nowrap">
+        <span>🎙️ 语音模式</span>
+        <span id="voice-tab-dot" class="w-2 h-2 rounded-full bg-slate-600 shrink-0"></span>
+      </button>
+    </div>
+
+    <!-- 右侧快捷动作 -->
+    <div class="flex flex-wrap items-center gap-2">
+      <button id="btn-toggle-expand-all" onclick="toggleAllBoxesExpand()" class="tactile-btn px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium border border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 whitespace-nowrap">
+        ↕️ 一键撑开/恢复高度
+      </button>
+      <button onclick="refreshDashboard()" class="tactile-btn px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-mono border border-surface-700 bg-surface-900 hover:bg-surface-800 text-slate-300 whitespace-nowrap">
+        ↻ 刷新状态
+      </button>
+      <button onclick="restartBackend()" class="tactile-btn px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 whitespace-nowrap">
+        热重启 8080
+      </button>
+    </div>
+  </header>
+
+  <!-- 全局 Toast 通知 -->
+  <div id="toast-box" class="fixed bottom-5 right-5 z-50 hidden max-w-[90vw] px-4 py-2.5 rounded-xl border border-surface-700 bg-surface-900/95 text-xs font-medium text-slate-100 shadow-xl break-words"></div>
+
+  <main class="max-w-[1360px] mx-auto px-3 sm:px-6 py-5 sm:py-6 space-y-6">
+
+    <!-- =================================================================== -->
+    <!-- ⚡ 实时生成进度监控台（文字生成 / 二次元生图 4阶段 / 语音合成 3阶段）   -->
+    <!-- =================================================================== -->
+    <section id="rt-progress-panel" class="rounded-2xl border border-sky-500/30 bg-surface-900/95 p-4 sm:p-5 shadow-lg">
+      <div class="flex flex-wrap items-center justify-between gap-2.5 pb-3.5 mb-4 border-b border-surface-700/80">
+        <div class="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
+          <span class="px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30 whitespace-nowrap">LIVE PIPELINE</span>
+          <h2 class="text-sm sm:text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">⚡ 实时生成进度监控台</h2>
+          <span id="rt-poll-indicator" class="text-xs font-mono text-slate-400 break-words">1.2s 极速轮询中 · 文本框支持纵向拖拽调节并自动记忆高度</span>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <button onclick="toggleAllBoxesExpand()" class="tactile-btn px-3 py-1 rounded-lg text-xs font-mono border border-sky-500/30 bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 whitespace-nowrap">
+            ↕️ 一键撑开/恢复高度
+          </button>
+        </div>
+      </div>
+
+      <div id="rt-cards-container" class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- 默认展示三链路卡片骨架，由 1.2s 轮询实时填充最新状态 -->
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- 工作区 1：🤖 机器人模式 (Bot Agent Workspace)                        -->
+    <!-- =================================================================== -->
+    <section id="workspace-bot" class="space-y-6">
+
+      <!-- 3D 休息室舞台：首屏先显示占位，空闲后再加载 Three.js -->
+      <section id="lounge-stage-wrap" class="stage-shell rounded-2xl border border-surface-700 bg-surface-950 overflow-hidden relative">
+        <div id="lounge-stage" class="absolute inset-0"></div>
+        <div id="lounge-stage-placeholder" class="absolute inset-0 flex flex-col items-center justify-center gap-4">
+          <div class="stage-loader" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <p id="lounge-stage-progress" class="font-mono text-xs text-slate-400">等待加载 3D 场景…</p>
+        </div>
+      </section>
+
+      <!-- 顶部 Bento 状态与主控横幅 (Asymmetric 3-Cell Grid) -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <!-- Cell 1: 机器人总开关与连接态 (5 cols) -->
+        <div class="lg:col-span-5 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5 flex flex-col justify-between">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <span class="font-mono text-[11px] uppercase tracking-wider text-sky-400">BOT MASTER SWITCH</span>
+              <h2 class="text-lg sm:text-xl font-bold tracking-tight mt-1">群聊与私聊响应总闸</h2>
+              <p class="text-xs text-slate-400 mt-1">关闭后机器人在所有群保持静默，仅响应管理员私聊指令。</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer mt-1 shrink-0">
+              <input type="checkbox" id="bot-global-toggle" class="sr-only peer" onchange="toggleGlobal(this.checked)">
+              <div class="w-12 h-6 bg-surface-700 rounded-full peer peer-checked:bg-sky-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-6"></div>
+            </label>
+          </div>
+          <div class="mt-5 pt-4 border-t border-surface-800 flex flex-wrap items-center justify-between gap-1 text-xs font-mono min-w-0">
+            <span class="text-slate-400 shrink-0">OneBot V11 反向 WS</span>
+            <span id="bot-ws-status" class="text-emerald-400 break-all">ws://127.0.0.1:8080/onebot/v11/ws</span>
+          </div>
+          <div class="mt-4 pt-3 border-t border-surface-800 flex items-center justify-between gap-3">
+            <div class="min-w-0">
+              <div class="text-xs font-semibold text-slate-200">接受戳一戳</div>
+              <div class="text-[11px] text-slate-400">关闭后忽略所有戳机器人通知，避免连续互动刷屏</div>
+            </div>
+            <input type="checkbox" id="accept-poke-toggle" class="w-4 h-4 shrink-0 rounded accent-sky-500" onchange="saveRagSetting('accept_poke', this)" />
+          </div>
+        </div>
+
+        <!-- Cell 2: 官方干员人设与群画像模式切换 (4 cols) -->
+        <div class="lg:col-span-4 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5 flex flex-col justify-between">
+          <div>
+            <div class="flex items-center justify-between gap-2">
+              <h2 class="text-base font-bold text-slate-100">当前激活人格模式</h2>
+              <span id="active-char-badge" class="px-2 py-0.5 rounded-md font-mono text-xs bg-sky-500/15 text-sky-400 border border-sky-500/30">amiya</span>
+            </div>
+            <p class="text-xs text-slate-400 mt-1">优先级：安慰模式 &gt; 干员模式 &gt; 群画像数字人格</p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3.5">
+              <button onclick="setCharacter('amiya')" data-char="amiya" class="char-btn tactile-btn px-3 py-2 rounded-xl border border-surface-700 bg-surface-850 text-left">
+                <div class="text-xs font-semibold text-slate-100">阿米娅 Amiya</div>
+                <div class="text-[11px] text-slate-400">百炼 RAG + 温柔领袖</div>
+              </button>
+              <button onclick="setCharacter('kaltsit')" data-char="kaltsit" class="char-btn tactile-btn px-3 py-2 rounded-xl border border-surface-700 bg-surface-850 text-left">
+                <div class="text-xs font-semibold text-slate-100">凯尔希 Kal'tsit</div>
+                <div class="text-[11px] text-slate-400">百炼 RAG + 冷静医疗</div>
+              </button>
+              <button onclick="setCharacter('dania')" data-char="dania" class="char-btn tactile-btn px-3 py-2 rounded-xl border border-surface-700 bg-surface-850 text-left">
+                <div class="text-xs font-semibold text-slate-100">达妮娅 Dania</div>
+                <div class="text-[11px] text-slate-400">鸣潮共鸣者 + 傲娇战友</div>
+              </button>
+              <button onclick="setCharacter('none')" data-char="none" class="char-btn tactile-btn px-3 py-2 rounded-xl border border-surface-700 bg-surface-850 text-left">
+                <div class="text-xs font-semibold text-slate-100">群画像复刻模式</div>
+                <div class="text-[11px] text-slate-400">按群 JSON 模仿群友</div>
+              </button>
+            </div>
+
+            <!-- 💬 角色日常闲聊模式与风格开关 -->
+            <div class="mt-3.5 pt-3 border-t border-surface-800 space-y-2.5">
+              <div class="flex items-center justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-xs font-bold text-sky-400">💬 极速日常口语闲聊</span>
+                    <span id="small-talk-status-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-400">OFF</span>
+                  </div>
+                  <p class="text-[11px] text-slate-400 mt-0.5">告别百炼长篇公文小作文，DeepSeek 极速短句响应</p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input type="checkbox" id="small-talk-toggle" class="sr-only peer" onchange="toggleSmallTalk(this.checked)">
+                  <div class="w-10 h-5 bg-surface-700 rounded-full peer peer-checked:bg-sky-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-5"></div>
+                </label>
+              </div>
+
+              <!-- 闲聊风格二级切换开关 -->
+              <div class="bg-surface-950/70 p-2.5 rounded-xl border border-surface-800/80 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div class="min-w-0">
+                  <div class="text-[11px] text-slate-400">闲聊风格定制：</div>
+                  <div id="small-talk-style-desc" class="text-xs font-semibold text-emerald-400 mt-0.5">🌸 纯角色设定 (5~20字)</div>
+                </div>
+                <div class="flex items-center gap-1 bg-surface-800/90 p-1 rounded-lg border border-surface-700 shrink-0">
+                  <button type="button" id="btn-style-pure" onclick="setSmallTalkStyle('pure_persona')" class="cursor-pointer select-none px-2.5 py-1 rounded text-[11px] font-semibold transition-all bg-sky-500/25 text-sky-300 border border-sky-500/50 shadow-sm whitespace-nowrap">
+                    🌸 纯角色 (5~20字)
+                  </button>
+                  <button type="button" id="btn-style-group" onclick="setSmallTalkStyle('group_mimic')" class="cursor-pointer select-none px-2.5 py-1 rounded text-[11px] font-medium transition-all text-slate-400 hover:text-slate-200 border border-transparent whitespace-nowrap">
+                    🐟 群友镜像 (借表达)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- ⚡ 默认回复模式 (免触发词 / 1.5s防刷屏) -->
+            <div class="mt-2.5 pt-2.5 border-t border-surface-800 flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-xs font-bold text-amber-400">⚡ 默认回复模式</span>
+                  <span id="auto-reply-status-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">ON · 免触发词</span>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-0.5">免 @ / 免角色名自动搭话（内置群配额与防刷屏）</p>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                <input type="checkbox" id="auto-reply-toggle" class="sr-only peer" checked onchange="toggleAutoReply(this.checked)">
+                <div class="w-10 h-5 bg-surface-700 rounded-full peer peer-checked:bg-amber-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-5"></div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cell 3: 千问生图与百炼提示词 Agent 链路状态 (3 cols) -->
+        <div class="lg:col-span-3 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5 flex flex-col justify-between">
+          <div>
+            <h2 class="text-base font-bold text-slate-100">二次元生图与工作流管线</h2>
+            <div class="mt-3 space-y-2 text-xs font-mono">
+              <div class="flex justify-between gap-2">
+                <span class="text-slate-400">主渲染引擎</span>
+                <span id="info-img-model" class="text-sky-400 truncate">qwen-image-2.1-pro</span>
+              </div>
+              <div class="flex justify-between gap-2">
+                <span class="text-slate-400">提示词 Agent</span>
+                <span id="info-prompt-agent" class="text-emerald-400 truncate">97fcb1dc...e6d0</span>
+              </div>
+              <div class="flex justify-between gap-2">
+                <span class="text-slate-400">视觉解析器</span>
+                <span class="text-slate-200 truncate">qwen-vl-max</span>
+              </div>
+              <div class="flex justify-between gap-2">
+                <span class="text-slate-400">已归档角色立绘</span>
+                <span id="info-refs-count" class="text-slate-200">3 张</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 全新核心卡片：群聊合并与发送节奏（全局默认配置） -->
+      <div id="group-chat-quota-card" class="rounded-2xl border border-sky-500/30 bg-surface-900/90 p-4 sm:p-5 space-y-4 shadow-lg">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-surface-800 gap-2.5">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30">GLOBAL DEFAULT</span>
+              <h3 class="text-sm font-bold text-slate-100">⏱️ 群聊合并与发送节奏（全局默认配置）</h3>
+            </div>
+            <p class="text-xs text-slate-400 mt-1">
+              当前配置作用域为<strong>全局默认值</strong>（作用于所有白名单群）：在调用模型前原子预占额度，显式 @/引用回复/指令/名字唤醒优先调度，长回答按气泡节奏公平分段投递。
+            </p>
+          </div>
+          <div class="flex items-center gap-3 shrink-0">
+            <span class="text-xs font-medium text-slate-300">启用群消息合并</span>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" id="group-cfg-buffer-enabled" class="sr-only peer" onchange="markGroupChatFormDirty()">
+              <div class="w-11 h-6 bg-surface-700 rounded-full peer peer-checked:bg-sky-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>
+            </label>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 text-xs">
+          <label class="block space-y-1 min-w-0">
+            <span class="text-slate-400 block">合并窗口秒数 (0~10s)</span>
+            <input id="group-cfg-merge-window" type="number" min="0" max="10" step="0.1" value="1.5" oninput="markGroupChatFormDirty()" class="w-full px-3 py-1.5 rounded-xl bg-surface-950 border border-surface-700 font-mono text-slate-100 focus:outline-none focus:border-sky-500" />
+          </label>
+          <label class="block space-y-1 min-w-0">
+            <span class="text-slate-400 block">单批最大消息数 (1~20)</span>
+            <input id="group-cfg-max-messages" type="number" min="1" max="20" step="1" value="5" oninput="markGroupChatFormDirty()" class="w-full px-3 py-1.5 rounded-xl bg-surface-950 border border-surface-700 font-mono text-slate-100 focus:outline-none focus:border-sky-500" />
+          </label>
+          <label class="block space-y-1 min-w-0">
+            <span class="text-slate-400 block">单批最大字符数 (200~8000)</span>
+            <input id="group-cfg-max-chars" type="number" min="200" max="8000" step="100" value="2000" oninput="markGroupChatFormDirty()" class="w-full px-3 py-1.5 rounded-xl bg-surface-950 border border-surface-700 font-mono text-slate-100 focus:outline-none focus:border-sky-500" />
+          </label>
+          <label class="block space-y-1 min-w-0">
+            <span class="text-slate-400 block">普通最小发送间隔 (0.5~120s)</span>
+            <input id="group-cfg-min-interval" type="number" min="0.5" max="120" step="0.5" value="8.0" oninput="markGroupChatFormDirty()" class="w-full px-3 py-1.5 rounded-xl bg-surface-950 border border-surface-700 font-mono text-slate-100 focus:outline-none focus:border-sky-500" />
+          </label>
+          <label class="block space-y-1 min-w-0">
+            <span class="text-slate-400 block">每分钟普通回复上限 (1~120)</span>
+            <input id="group-cfg-max-per-minute" type="number" min="1" max="120" step="1" value="4" oninput="markGroupChatFormDirty()" class="w-full px-3 py-1.5 rounded-xl bg-surface-950 border border-surface-700 font-mono text-slate-100 focus:outline-none focus:border-sky-500" />
+          </label>
+          <label class="block space-y-1 min-w-0">
+            <span class="text-slate-400 block">长回答分段间隔 (0~10s)</span>
+            <input id="group-cfg-chunk-pace" type="number" min="0" max="10" step="0.1" value="1.2" oninput="markGroupChatFormDirty()" class="w-full px-3 py-1.5 rounded-xl bg-surface-950 border border-surface-700 font-mono text-slate-100 focus:outline-none focus:border-sky-500" />
+          </label>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-surface-800 text-xs">
+          <span id="group-cfg-status-msg" role="status" class="font-mono text-slate-400 break-words">全局默认配置已同步</span>
+          <div class="flex flex-wrap items-center gap-2">
+            <button type="button" id="btn-reset-group-cfg" onclick="resetGroupChatConfigForm()" class="tactile-btn px-3 py-1.5 rounded-xl border border-surface-700 bg-surface-850 hover:border-surface-600 text-slate-300 text-xs whitespace-nowrap">
+              ↺ 恢复已保存值
+            </button>
+            <button type="button" id="btn-save-group-cfg" onclick="saveGroupChatConfig(this)" class="tactile-btn px-4 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs whitespace-nowrap">
+              💾 保存全局群节奏配置
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="amiya-sticker-config-card" class="rounded-2xl border border-fuchsia-500/30 bg-surface-900/90 p-4 sm:p-5 space-y-4 shadow-lg">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div class="min-w-0">
+            <h3 class="text-sm font-bold text-slate-100">🐰 阿米娅表情包</h3>
+            <p class="text-xs text-slate-400 mt-1">轻松回复时由模型自行决定是否补图；可选随机延迟预设，或自定义 1–20 秒区间。明确标记的 QQ 表情会自动收录，未带内容摘要的素材需标注后才会参与选择。</p>
+          </div>
+          <label class="flex items-center gap-3 shrink-0 cursor-pointer">
+            <span class="text-xs font-medium text-slate-300">允许发送</span>
+            <span class="relative inline-flex items-center">
+              <input type="checkbox" id="amiya-sticker-enabled" class="sr-only peer" onchange="markStickerFormDirty()">
+              <span class="w-11 h-6 bg-surface-700 rounded-full peer-checked:bg-fuchsia-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></span>
+            </span>
+          </label>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <label class="block space-y-1 min-w-0">
+            <span class="text-slate-400 block">延迟预设</span>
+            <select id="amiya-sticker-delay-preset" onchange="applyStickerDelayPreset()" class="w-full px-3 py-2 rounded-xl bg-surface-950 border border-surface-700 text-slate-100 focus:outline-none focus:border-fuchsia-500">
+              <option value="custom">自定义</option>
+              <option value="1-5">随机 1–5 秒</option>
+              <option value="1-10">随机 1–10 秒</option>
+              <option value="1-20">随机 1–20 秒</option>
+              <option value="5-20">随机 5–20 秒</option>
+            </select>
+          </label>
+          <label class="block space-y-1 min-w-0">
+            <span class="text-slate-400 block">最短发送延迟 (1~20 秒)</span>
+            <input id="amiya-sticker-min-delay" type="number" min="1" max="20" step="0.5" value="1" oninput="markStickerFormDirty(); setStickerDelayPresetCustom()" class="w-full px-3 py-2 rounded-xl bg-surface-950 border border-surface-700 font-mono text-slate-100 focus:outline-none focus:border-fuchsia-500" />
+          </label>
+          <label class="block space-y-1 min-w-0">
+            <span class="text-slate-400 block">最长发送延迟 (1~20 秒)</span>
+            <input id="amiya-sticker-max-delay" type="number" min="1" max="20" step="0.5" value="20" oninput="markStickerFormDirty(); setStickerDelayPresetCustom()" class="w-full px-3 py-2 rounded-xl bg-surface-950 border border-surface-700 font-mono text-slate-100 focus:outline-none focus:border-fuchsia-500" />
+          </label>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-surface-800 text-xs">
+          <span id="amiya-sticker-status" role="status" class="font-mono text-slate-400 break-words">等待配置同步</span>
+          <div class="flex items-center gap-2">
+            <button type="button" onclick="resetStickerConfigForm()" class="tactile-btn px-3 py-1.5 rounded-xl border border-surface-700 bg-surface-850 hover:border-surface-600 text-slate-300 text-xs whitespace-nowrap">恢复已保存值</button>
+            <button type="button" id="btn-save-sticker-config" onclick="saveStickerConfig(this)" class="tactile-btn px-4 py-1.5 rounded-xl bg-fuchsia-500 hover:bg-fuchsia-400 text-slate-950 font-semibold text-xs whitespace-nowrap">💾 保存表情包设置</button>
+          </div>
+        </div>
+      </div>
+
+      <section id="mac-actions-card" class="rounded-2xl border border-amber-500/30 bg-surface-900/90 p-4 sm:p-5 space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <h3 class="text-sm font-bold text-slate-100">🖥️ 阿米娅 · Mac 本机行动</h3>
+          <button type="button" onclick="refreshMacActions(true)" class="tactile-btn px-3 py-2 rounded-xl border border-surface-700 text-xs">刷新动作与设置</button>
+        </div>
+        <p class="text-xs text-slate-400">仅主人 QQ 可提出动作。支持通知、Apple Music、提醒事项、日历与已审核快捷指令。微信需绑定专用快捷指令；快捷指令始终需要确认。语音模式下请在此查看待确认动作。</p>
+        <div class="flex flex-wrap gap-4 text-xs text-slate-200">
+          <label><input type="checkbox" id="mac-action-enabled"> 启用本机联动</label>
+          <label><input type="checkbox" id="mac-action-auto-care"> 允许 AI 主动提议关怀</label>
+          <label><input type="checkbox" id="mac-action-auto-music"> 允许关怀时主动操作音乐</label>
+          <label><input type="checkbox" id="mac-action-confirm" checked> 执行前需要我确认</label>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+          <label class="space-y-1">动作冷却（秒）<input id="mac-action-cooldown" type="number" min="0" max="86400" value="180" class="block w-full rounded-xl p-2 bg-surface-950 border border-surface-700"></label>
+          <label class="space-y-1">每日动作上限<input id="mac-action-daily" type="number" min="1" max="100" value="12" class="block w-full rounded-xl p-2 bg-surface-950 border border-surface-700"></label>
+        </div>
+        <label class="block text-xs space-y-1">已审核快捷指令名称（每行一个；默认不允许任何快捷指令）<textarea id="mac-action-shortcuts" rows="2" class="block w-full rounded-xl p-2 bg-surface-950 border border-surface-700"></textarea></label>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" onclick="saveMacActions(this)" class="tactile-btn px-4 py-2 rounded-xl bg-amber-400 text-slate-950 font-semibold text-xs">保存联动设置</button>
+          <button type="button" onclick="testMacNotification(this)" class="tactile-btn px-3 py-2 rounded-xl border border-surface-700 text-xs">测试桌面通知</button>
+        </div>
+        <div class="flex flex-col sm:flex-row gap-2">
+          <input id="mac-action-request" placeholder="例如：明天早上八点提醒我带资料" class="min-w-0 flex-1 rounded-xl p-2 bg-surface-950 border border-surface-700 text-xs">
+          <button type="button" onclick="planMacAction(this)" class="tactile-btn px-3 py-2 rounded-xl border border-surface-700 text-xs">让阿米娅准备动作</button>
+        </div>
+        <div id="mac-action-status" role="status" class="text-xs text-slate-400 break-words">点击刷新读取当前设置，保存后生效。</div>
+        <div id="mac-action-jobs" class="space-y-2 text-xs"></div>
+        <details class="text-xs text-slate-300"><summary>MuMu 实机验证（只截图与规划）</summary>
+          <p class="text-slate-400 my-2">先将模拟器打开到无隐私的系统设置页。点击后会把该模拟器截图发给阿里视觉模型做定位，不执行点击或付款。</p>
+          <button type="button" onclick="verifyMuMu(this)" class="tactile-btn px-3 py-2 rounded-xl border border-surface-700">验证当前 MuMu 画面</button>
+          <pre id="mumu-action-result" class="mt-2 whitespace-pre-wrap break-words"></pre>
+        </details>
+      </section>
+
+      <!-- 中部两列业务控制区：白名单群管理 + 安慰模式 + 群聊天记录画像提取 -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <!-- 左侧：群白名单与安慰目标管理 (6 cols) -->
+        <div class="lg:col-span-6 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5 space-y-5">
+          <!-- 群白名单管理 -->
+          <div>
+            <div class="flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <h3 class="text-sm font-bold text-slate-100">群聊白名单管理 (active_groups)</h3>
+                <p class="text-xs text-slate-400">仅在以下白名单群中响应消息，支持直接增删群号。</p>
+              </div>
+              <span id="group-count-badge" class="font-mono text-xs text-slate-400 shrink-0">0 个群</span>
+            </div>
+            <div class="flex flex-col sm:flex-row gap-2 mt-3">
+              <input id="input-group-id" type="text" placeholder="输入 QQ 群号（如 130439695）" class="flex-1 min-w-0 px-3 py-1.5 rounded-xl bg-surface-950 border border-surface-700 text-xs font-mono text-slate-100 focus:outline-none focus:border-sky-500" />
+              <button id="btn-add-group" onclick="modifyGroup('add', '', this)" class="tactile-btn px-4 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs whitespace-nowrap">
+                + 加入白名单
+              </button>
+            </div>
+            <div id="active-groups-list" class="flex flex-wrap gap-2 mt-3"></div>
+          </div>
+
+          <div class="border-t border-surface-800 pt-4">
+            <div class="flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <h3 class="text-sm font-bold text-slate-100">定向情绪安慰模式 (comfort_targets)</h3>
+                <p class="text-xs text-slate-400">绑定的 QQ 号在非生图对话时优先走温柔共情安慰通道，点击 × 可解绑。</p>
+              </div>
+            </div>
+            <div class="flex flex-col sm:flex-row gap-2 mt-3">
+              <input id="input-comfort-qq" type="text" placeholder="输入需要安慰的 QQ 号" class="flex-1 min-w-0 px-3 py-1.5 rounded-xl bg-surface-950 border border-surface-700 text-xs font-mono text-slate-100 focus:outline-none focus:border-sky-500" />
+              <button id="btn-add-comfort" onclick="modifyComfort(true, '', this)" class="tactile-btn px-4 py-1.5 rounded-xl border border-sky-500/40 bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 font-semibold text-xs whitespace-nowrap">
+                + 绑定安慰
+              </button>
+            </div>
+            <div id="comfort-targets-list" class="flex flex-wrap gap-2 mt-3"></div>
+          </div>
+        </div>
+
+        <!-- 右侧：群画像数字人格提取 (6 cols) -->
+        <div class="lg:col-span-6 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5 flex flex-col justify-between space-y-4">
+          <div>
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="min-w-0">
+                <h3 class="text-sm font-bold text-slate-100">群聊天记录数字人格提取 (Task5)</h3>
+                <p class="text-xs text-slate-400">填入群号并粘贴聊天记录（或选择 .txt 文件），自动清洗 CQ 码并提炼该群场景表达与风格参考。</p>
+              </div>
+              <span id="extracted-groups-pills" class="font-mono text-[11px] text-sky-400 break-words"></span>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-3">
+              <input id="extract-group-id" type="text" placeholder="目标群号 (如 711676140)" class="sm:col-span-1 min-w-0 px-3 py-1.5 rounded-xl bg-surface-950 border border-surface-700 text-xs font-mono text-slate-100 focus:outline-none focus:border-sky-500" />
+              <label class="sm:col-span-2 flex items-center justify-center px-3 py-1.5 rounded-xl border border-dashed border-surface-700 bg-surface-950 hover:border-sky-500/50 cursor-pointer text-xs text-slate-400 text-center">
+                <span>📂 选择聊天记录 .txt 文件自动填入</span>
+                <input type="file" accept=".txt,.log" class="hidden" onchange="loadTxtFile(this)" />
+              </label>
+            </div>
+            <textarea id="extract-raw-text" rows="4" placeholder="在此粘贴群聊天记录文本，或点击上方选择 .txt 文件..." class="w-full mt-2.5 p-3 rounded-xl bg-surface-950 border border-surface-700 text-xs font-mono text-slate-200 focus:outline-none focus:border-sky-500"></textarea>
+          </div>
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span id="extract-status-msg" class="text-xs font-mono text-slate-400 break-words">就绪</span>
+            <button onclick="submitGroupExtract()" id="btn-extract-group" class="tactile-btn px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs whitespace-nowrap">
+              提炼并保存群画像 JSON
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 群聊成员 (群u) 白名单多选管理中心 -->
+      <div class="rounded-2xl border border-sky-500/30 bg-surface-900/90 p-4 sm:p-5 space-y-4 shadow-lg">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-surface-800 gap-3">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30">WHITELIST</span>
+              <h3 class="text-sm font-bold text-slate-100">🛡️ 群聊成员白名单管理 (群u发言限制)</h3>
+            </div>
+            <p class="text-xs text-slate-400 mt-1">
+              开启后，机器人仅响应已勾选群成员的发言（超级管理员自动豁免）。未开启时，白名单群内的所有成员均可正常与机器人对话。
+            </p>
+          </div>
+          <div class="flex items-center gap-3 shrink-0">
+            <span id="group-user-wl-status-label" class="text-xs font-mono text-slate-400">白名单过滤: 禁用</span>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" id="group-user-wl-master-toggle" class="sr-only peer" onchange="toggleGroupUserWhitelist(this.checked)">
+              <div class="w-11 h-6 bg-surface-700 rounded-full peer peer-checked:bg-sky-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>
+            </label>
+          </div>
+        </div>
+
+        <!-- 控制工具栏：选择群、读取成员、搜索过滤、快捷选择、保存按钮 -->
+        <div class="flex flex-wrap items-center justify-between gap-3 bg-surface-950 p-3 rounded-xl border border-surface-800">
+          <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+            <span class="text-xs text-slate-400 font-medium whitespace-nowrap">目标群号:</span>
+            <select id="wl-group-select" class="min-w-0 px-3 py-1.5 rounded-xl bg-surface-900 border border-surface-700 text-xs font-mono text-slate-200 focus:outline-none focus:border-sky-500" onchange="onWhitelistGroupChange()">
+              <option value="">-- 选择白名单群 --</option>
+            </select>
+            <input id="wl-custom-group-input" type="text" placeholder="或输入群号" class="w-28 sm:w-32 px-3 py-1.5 rounded-xl bg-surface-900 border border-surface-700 text-xs font-mono text-slate-200 focus:outline-none focus:border-sky-500" />
+            <button onclick="fetchGroupMembers()" id="btn-fetch-members" class="tactile-btn px-3.5 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs flex items-center gap-1.5 whitespace-nowrap">
+              <span>🔄 读取群成员</span>
+            </button>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            <input id="wl-member-search" type="text" placeholder="🔍 搜索昵称/名片/QQ号..." oninput="filterGroupMembers()" class="w-full sm:w-44 px-3 py-1.5 rounded-xl bg-surface-900 border border-surface-700 text-xs text-slate-200 focus:outline-none focus:border-sky-500" />
+            <button onclick="selectAllMembers(true)" class="px-2.5 py-1.5 rounded-lg border border-surface-700 bg-surface-850 hover:border-surface-600 text-slate-300 text-xs whitespace-nowrap">全选</button>
+            <button onclick="selectAllMembers(false)" class="px-2.5 py-1.5 rounded-lg border border-surface-700 bg-surface-850 hover:border-surface-600 text-slate-300 text-xs whitespace-nowrap">清空</button>
+            <button onclick="invertMemberSelection()" class="px-2.5 py-1.5 rounded-lg border border-surface-700 bg-surface-850 hover:border-surface-600 text-slate-300 text-xs whitespace-nowrap">反选</button>
+            <button onclick="saveGroupUserWhitelist()" id="btn-save-user-wl" class="tactile-btn px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs flex items-center gap-1.5 whitespace-nowrap">
+              <span>💾 保存该群白名单</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 统计信息与多选容器 -->
+        <div class="flex flex-wrap items-center justify-between gap-2 text-xs px-1">
+          <span id="wl-member-stats" class="text-slate-400 font-mono break-words">请先选择群号并点击“读取群成员”</span>
+          <span id="wl-save-status-msg" class="text-emerald-400 font-mono text-[11px] break-words"></span>
+        </div>
+
+        <div id="wl-members-grid" class="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5 max-h-[360px] overflow-y-auto p-3 rounded-xl bg-surface-950 border border-surface-800">
+          <div class="col-span-full text-center py-10 text-xs text-slate-500">
+            暂未加载群成员，请在上方选择群号后点击【🔄 读取群成员】
+          </div>
+        </div>
+      </div>
+
+      <!-- 群聊风格实时训练中心 (Training Hub) 与默认 QQ 实机对话测试 -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <!-- 左侧 7 cols: 群聊风格训练中心 -->
+        <div class="lg:col-span-7 min-w-0 rounded-2xl border border-sky-500/30 bg-surface-900/90 p-4 sm:p-5 space-y-4 shadow-lg">
+          <div class="flex items-center justify-between gap-3 pb-3 border-b border-surface-800">
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30">TRAINING HUB</span>
+                <h3 class="text-sm font-bold text-slate-100">📚 群聊风格实时训练中心 (特定群对话复刻)</h3>
+              </div>
+              <p class="text-xs text-slate-400 mt-1">自动采集指定 QQ 群全量聊天，构建真实引用对话对 (.jsonl) 并提炼 MaiBot 场景表达。</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer shrink-0">
+              <input type="checkbox" id="training-master-toggle" class="sr-only peer" onchange="toggleTrainingMaster(this.checked)">
+              <div class="w-11 h-6 bg-surface-700 rounded-full peer peer-checked:bg-emerald-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>
+            </label>
+          </div>
+
+          <div class="space-y-3">
+            <div class="flex flex-col sm:flex-row gap-2">
+              <input id="input-train-gid" type="text" placeholder="输入要训练的群号（如 971590027）" class="flex-1 min-w-0 px-3 py-1.5 rounded-xl bg-surface-950 border border-surface-700 text-xs font-mono text-slate-100 focus:outline-none focus:border-sky-500" />
+              <button onclick="triggerHistoryTrain()" id="btn-trigger-train" class="tactile-btn px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs flex items-center justify-center gap-1.5 whitespace-nowrap">
+                <span>⚡ 抓取120条并训练</span>
+              </button>
+            </div>
+
+            <!-- 群训练监控列表 -->
+            <div id="training-groups-table" class="space-y-2 max-h-[200px] overflow-y-auto pr-1"></div>
+          </div>
+        </div>
+
+        <!-- 右侧 5 cols: 默认测试 QQ 实时对话快捷测试 -->
+        <div class="lg:col-span-5 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5 flex flex-col justify-between space-y-3">
+          <div>
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <h3 class="text-sm font-bold text-slate-100">💬 默认 QQ 实时对话输出测试</h3>
+              <span id="superuser-qq-badge" class="px-2 py-0.5 rounded text-[11px] font-mono bg-sky-500/10 text-sky-300 border border-sky-500/30">QQ: 1785381042</span>
+            </div>
+            <p class="text-xs text-slate-400 mt-1">直接使用当前模式向您的默认 QQ 发送测试消息，验证回复效果。</p>
+            <div class="mt-3">
+              <input id="input-test-chat" type="text" value="阿米娅，今天在罗德岛忙什么呀？" placeholder="输入测试消息..." class="w-full px-3 py-2 rounded-xl bg-surface-950 border border-surface-700 text-xs text-slate-100 focus:outline-none focus:border-sky-500 font-mono" />
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-surface-800">
+            <span id="test-chat-status" class="text-xs font-mono text-slate-400 break-words">点击发送即可在手机QQ查收</span>
+            <button onclick="sendTestChatToDefaultQQ()" id="btn-send-test-chat" class="tactile-btn px-4 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs whitespace-nowrap">
+              🚀 发送到 1785381042
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部两列：AI 最新对话流 + 后端实时事件终端 -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <div class="lg:col-span-6 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-bold text-slate-100">AI 最新对话流</h3>
+            <span class="font-mono text-xs text-slate-400" id="dialogue-count-label">0 条记录</span>
+          </div>
+          <div id="dialogue-list-box" class="space-y-2.5 max-h-[280px] overflow-y-auto pr-1"></div>
+        </div>
+
+        <div class="lg:col-span-6 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-bold text-slate-100">后端实时事件与日志终端</h3>
+            <span class="font-mono text-xs text-slate-400" id="log-count-label">0 条事件</span>
+          </div>
+          <div id="log-list-box" class="p-3 rounded-xl bg-surface-950 border border-surface-800 font-mono text-[11px] space-y-1.5 max-h-[280px] overflow-y-auto"></div>
+        </div>
+      </div>
+
+      <div id="conversation-daily-center" class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
+        <div class="min-w-0 rounded-2xl border border-surface-700 bg-surface-900 p-4 sm:p-5 space-y-3">
+          <h2 class="text-base font-bold">对话记忆与响应</h2>
+          <p class="text-xs text-slate-400">同一 QQ 依次处理，不同 QQ 独立处理。短期会话保留 24 小时；长期画像按 QQ 号、角色与群/私聊范围严格隔离。</p>
+          <label class="flex items-center justify-between gap-3 text-sm"><span class="min-w-0 break-words">快速对话（失败转现有模型）</span><input id="rag-fast-toggle" type="checkbox" onchange="saveRagSetting('fast_reply_mode', this)" class="accent-sky-500 shrink-0"></label>
+          <label class="flex items-center justify-between gap-3 text-sm"><span class="min-w-0 break-words">快速对话携带个人历史</span><input id="rag-history-toggle" type="checkbox" onchange="saveRagSetting('chat_1v1_enabled', this)" class="accent-sky-500 shrink-0"></label>
+          <label class="flex items-center justify-between gap-3 text-sm"><span class="min-w-0 break-words">快速对话读取群时间轴（额外缓冲至多 320ms）</span><input id="rag-buffer-toggle" type="checkbox" onchange="saveRagSetting('group_buffer_enabled', this)" class="accent-sky-500 shrink-0"></label>
+          <p id="rag-request-status" role="status" class="text-xs text-slate-400 break-words">正在读取状态…</p>
+
+          <details class="border-t border-surface-700 pt-3">
+            <summary class="cursor-pointer text-sm font-medium">本地知识库管理</summary>
+            <div class="mt-3 space-y-2">
+              <select id="rag-entry-character" aria-label="知识库角色" class="w-full bg-surface-950 border border-surface-700 rounded-lg p-2 text-xs"><option value="amiya">阿米娅</option><option value="kaltsit">凯尔希</option><option value="dania">达妮娅</option><option value="all">通用</option></select>
+              <input id="rag-entry-title" aria-label="知识标题" placeholder="知识标题" class="w-full bg-surface-950 border border-surface-700 rounded-lg p-2 text-xs">
+              <input id="rag-entry-keywords" aria-label="知识关键词" placeholder="关键词（空格分隔）" class="w-full bg-surface-950 border border-surface-700 rounded-lg p-2 text-xs">
+              <textarea id="rag-entry-content" aria-label="知识正文" placeholder="知识正文" class="w-full bg-surface-950 border border-surface-700 rounded-lg p-2 text-xs"></textarea>
+              <button type="button" onclick="addPanelRagEntry(this)" class="tactile-btn rounded-lg bg-sky-500/20 px-3 py-2 text-xs text-sky-300">保存知识</button>
+              <div id="panel-rag-entries" class="space-y-2 max-h-60 overflow-y-auto text-xs"></div>
+            </div>
+          </details>
+
+          <details class="border-t border-surface-700 pt-3" open>
+            <summary class="cursor-pointer text-sm font-medium">按 QQ 号跨群共享人物画像与定向清理 (自动总结常驻开启)</summary>
+            <div class="mt-3 space-y-2.5 text-xs">
+              <p class="text-[11px] text-slate-400">
+                <span class="text-emerald-400 font-semibold">● 自动画像总结与记忆已强制常驻开启（不可关闭）</span>：各白名单群按「群号 + 群友 QQ 号」独立记录发言流水，同一 QQ 号在不同群聊与私聊的长期画像记忆自动跨群共享；仅支持按 QQ 号定向清空对应画像。
+              </p>
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <input id="profile-uid-input" placeholder="目标 QQ 号 (必填)" class="min-w-0 bg-surface-950 border border-surface-700 rounded-lg p-2 font-mono">
+                <input id="profile-group-input" placeholder="群号 (留空=跨群全作用域)" class="min-w-0 bg-surface-950 border border-surface-700 rounded-lg p-2 font-mono">
+                <select id="profile-char-select" aria-label="画像关联角色" class="min-w-0 bg-surface-950 border border-surface-700 rounded-lg p-2">
+                  <option value="amiya">角色: 阿米娅 (amiya)</option>
+                  <option value="kaltsit">角色: 凯尔希 (kaltsit)</option>
+                  <option value="dania">角色: 达妮娅 (dania)</option>
+                </select>
+              </div>
+              <input id="profile-title-input" placeholder="修正称呼偏好 (可选，如：林博士)" class="w-full bg-surface-950 border border-surface-700 rounded-lg p-2">
+              <input id="profile-fact-input" placeholder="新增确认事实 (可选)" class="w-full bg-surface-950 border border-surface-700 rounded-lg p-2">
+              <input id="profile-invalidate-input" placeholder="标记失效旧事实关键词 (可选)" class="w-full bg-surface-950 border border-surface-700 rounded-lg p-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <button type="button" onclick="loadUserProfileForPanel(this)" class="tactile-btn rounded-lg bg-slate-700/60 px-3 py-1.5 text-slate-200 whitespace-nowrap">🔍 查询画像详情</button>
+                <button type="button" onclick="submitUserProfileCorrection(this)" class="tactile-btn rounded-lg bg-sky-500/20 px-3 py-1.5 text-sky-300 whitespace-nowrap">💾 保存纠正</button>
+                <button type="button" onclick="deleteUserProfileForPanel(this)" class="tactile-btn rounded-lg bg-rose-500/20 px-3 py-1.5 text-rose-300 whitespace-nowrap">🧹 定向清空该 QQ 画像</button>
+              </div>
+              <div id="profile-summary-list" class="space-y-1.5 max-h-40 overflow-y-auto pt-1"></div>
+              <pre id="profile-manage-result" class="p-2.5 rounded-lg bg-surface-950 border border-surface-800 text-[11px] text-slate-300 max-h-44 overflow-y-auto">尚未查询画像详情（可点击上方列表项或输入 QQ 号查询）</pre>
+            </div>
+          </details>
+        </div>
+
+        <div class="min-w-0 rounded-2xl border border-surface-700 bg-surface-900 p-4 sm:p-5 space-y-3">
+          <h2 class="text-base font-bold">每日空间与早安塔罗</h2>
+          <p class="text-xs text-slate-400">北京时间触发；新接入默认不启用定时发布。按钮会实际发布到空间或白名单群。</p>
+          <label class="flex items-center justify-between gap-3 text-sm"><span class="min-w-0 break-words">启用每日定时发布</span><input id="daily-enabled-toggle" type="checkbox" onchange="saveRagSetting('daily_9am_enabled', this)" class="accent-amber-500 shrink-0"></label>
+          <label class="flex items-center justify-between gap-3 text-sm"><span class="min-w-0 break-words">定时发布空间</span><input id="daily-qzone-toggle" type="checkbox" onchange="saveRagSetting('daily_qzone_enabled', this)" class="accent-amber-500 shrink-0"></label>
+          <label class="flex items-center justify-between gap-3 text-sm"><span class="min-w-0 break-words">定时向白名单群发送早安</span><input id="daily-morning-toggle" type="checkbox" onchange="saveRagSetting('daily_morning_group_enabled', this)" class="accent-amber-500 shrink-0"></label>
+          <label class="flex flex-wrap justify-between items-center gap-2 text-sm"><span>触发时间（北京时间）</span><input id="daily-time-input" type="time" value="09:00" onchange="saveRagSetting('daily_schedule_time', this)" class="bg-surface-950 border border-surface-700 rounded-lg p-1.5 text-xs"></label>
+          <label class="flex items-center justify-between gap-3 text-sm"><span class="min-w-0 break-words">手动发布时生成配图</span><input id="daily-with-image" type="checkbox" checked class="accent-amber-500 shrink-0"></label>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" id="daily-qzone-button" onclick="submitPanelDaily('qzone')" class="tactile-btn rounded-lg bg-violet-500/20 text-violet-300 px-3 py-2 text-xs whitespace-nowrap">发布空间</button>
+            <button type="button" id="daily-morning-button" onclick="submitPanelDaily('morning')" class="tactile-btn rounded-lg bg-amber-500/20 text-amber-300 px-3 py-2 text-xs whitespace-nowrap">向白名单群发送早安</button>
+          </div>
+          <p id="daily-qzone-result" role="status" class="text-xs text-slate-400 break-words">空间：暂无任务</p>
+          <p id="daily-morning-result" role="status" class="text-xs text-slate-400 break-words">早安：暂无任务</p>
+          <button type="button" id="daily-qzone-acknowledge" hidden onclick="acknowledgePanelDaily('qzone')" class="text-xs text-slate-300 underline">我已检查空间，允许手动重新发起</button>
+          <button type="button" id="daily-morning-acknowledge" hidden onclick="acknowledgePanelDaily('morning')" class="text-xs text-slate-300 underline">我已检查 QQ，允许手动重发（再次发起会发送全部白名单群）</button>
+
+          <div class="border-t border-surface-700 pt-3 space-y-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <h3 class="text-sm font-bold">自主发言与空间决策</h3>
+              <span id="autonomous-quiet-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-surface-800 text-slate-300">安静时段: 23:00-08:00</span>
+            </div>
+            <label class="flex items-center justify-between gap-3 text-sm"><span class="min-w-0 break-words">启用自主参与/发起群聊</span><input id="autonomous-group-toggle" type="checkbox" onchange="saveAutonomousSetting('autonomous_group_chat_enabled', this)" class="accent-sky-500 shrink-0"></label>
+            <label class="flex items-center justify-between gap-3 text-sm"><span class="min-w-0 break-words">启用自主发布 QQ 空间（每日≤2条，间隔≥6h）</span><input id="autonomous-qzone-toggle" type="checkbox" onchange="saveAutonomousSetting('autonomous_qzone_enabled', this)" class="accent-violet-500 shrink-0"></label>
+            <p id="autonomous-status-text" role="status" class="text-xs text-slate-400 break-words">自主心智：读取中…</p>
+            <div id="autonomous-actions-list" class="space-y-1.5 max-h-36 overflow-y-auto text-[11px] font-mono"></div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- 工作区 2：🎙️ 语音模式 (Voice & Acoustic Workspace)                  -->
+    <!-- =================================================================== -->
+    <section id="workspace-voice" class="hidden space-y-6">
+
+      <!-- 顶部语音核心控制 Bento (3 Cells) -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <!-- Cell 1: QQ 语音回复主开关与发送策略 (5 cols) -->
+        <div class="lg:col-span-5 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5 flex flex-col justify-between">
+          <div>
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <span class="font-mono text-[11px] uppercase tracking-wider text-emerald-400">VOICE SYNTHESIS ENGINE</span>
+                <h2 class="text-lg sm:text-xl font-bold tracking-tight mt-1">QQ 语音回复模式</h2>
+                <p class="text-xs text-slate-400 mt-1">开启后，150 字以内的日常回复将自动通过 GPT-SoVITS 合成角色语音发出。</p>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer mt-1 shrink-0">
+                <input type="checkbox" id="voice-main-toggle" class="sr-only peer" onchange="saveVoiceConfig()">
+                <div class="w-12 h-6 bg-surface-700 rounded-full peer peer-checked:bg-emerald-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-6"></div>
+              </label>
+            </div>
+
+            <div class="mt-4 pt-4 border-t border-surface-800 flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <div class="text-xs font-semibold text-slate-200">纯语音沉浸回复模式 (Voice-Only)</div>
+                <div class="text-[11px] text-slate-400">开启后短句只发语音条不发文字（若合成超时自动降级发文字）</div>
+              </div>
+              <input type="checkbox" id="voice-only-toggle" class="w-4 h-4 shrink-0 rounded accent-emerald-500" onchange="saveVoiceConfig()" />
+            </div>
+          </div>
+
+          <div class="mt-4 pt-3 border-t border-surface-800 flex flex-wrap items-center justify-between gap-2 text-xs font-mono text-slate-400">
+            <span>短句同步阈值: &le;60字</span>
+            <span>中长句首句截断: &le;45字</span>
+          </div>
+        </div>
+
+        <!-- Cell 2: 9880 推理服务与 9876 语音工作室进程监控与启停 (4 cols) -->
+        <div class="lg:col-span-4 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5 flex flex-col justify-between space-y-3">
+          <div>
+            <h2 class="text-base font-bold text-slate-100">SoVITS 本地声学服务节点</h2>
+            <p class="text-xs text-slate-400 mt-0.5">9880 负责机器人实时发语音，9876 为多参考融合与批量调音台。</p>
+          </div>
+
+          <!-- 9880 状态行 -->
+          <div class="p-3 rounded-xl bg-surface-950 border border-surface-800 flex flex-wrap items-center justify-between gap-2">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <span id="dot-9880" class="w-2 h-2 rounded-full bg-red-500 shrink-0"></span>
+                <span class="text-xs font-bold font-mono">9880 GPT-SoVITS API</span>
+              </div>
+              <div id="text-9880" class="text-[11px] text-slate-400 mt-0.5">检测中...</div>
+            </div>
+            <div class="flex gap-1.5 shrink-0">
+              <button onclick="controlVoiceService('9880', 'start')" class="tactile-btn px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-medium whitespace-nowrap">启动</button>
+              <button onclick="controlVoiceService('9880', 'stop')" class="tactile-btn px-2.5 py-1 rounded-lg bg-surface-800 text-slate-300 text-xs whitespace-nowrap">停止</button>
+            </div>
+          </div>
+
+          <!-- 9876 状态行 -->
+          <div class="p-3 rounded-xl bg-surface-950 border border-surface-800 flex flex-wrap items-center justify-between gap-2">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <span id="dot-9876" class="w-2 h-2 rounded-full bg-red-500 shrink-0"></span>
+                <span class="text-xs font-bold font-mono">9876 Voice Studio Pro</span>
+              </div>
+              <div id="text-9876" class="text-[11px] text-slate-400 mt-0.5">检测中...</div>
+            </div>
+            <div class="flex gap-1.5 shrink-0">
+              <button onclick="controlVoiceService('9876', 'start')" class="tactile-btn px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-medium whitespace-nowrap">启动</button>
+              <a href="http://127.0.0.1:9876" target="_blank" class="tactile-btn px-2.5 py-1 rounded-lg bg-emerald-500 text-slate-950 text-xs font-semibold whitespace-nowrap">打开 9876 ↗</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cell 3: 情绪参考路由策略 (3 cols) -->
+        <div class="lg:col-span-3 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5 flex flex-col justify-between">
+          <div>
+            <h2 class="text-base font-bold text-slate-100">情绪音色路由策略</h2>
+            <p class="text-xs text-slate-400 mt-1">按需启用 AI 情绪导师；关闭时保持默认基准音色，不增加模型等待。</p>
+            <label class="flex items-center justify-between gap-3 mt-3 p-2.5 rounded-xl bg-surface-950 border border-surface-800 cursor-pointer">
+              <span class="min-w-0">
+                <span class="block text-xs font-semibold text-slate-100">AI 情绪导师 (极速单轮驱动)</span>
+                <span class="block text-[11px] text-slate-400">开启后由对话大模型首轮生成情绪标签并在本地 0ms 匹配音色；关闭后保持角色默认基准音色</span>
+              </span>
+              <input type="checkbox" id="voice-emotion-director-toggle" class="w-4 h-4 shrink-0 rounded accent-emerald-500" onchange="saveVoiceConfig()" />
+            </label>
+            <label class="block text-xs text-slate-300 mt-3" for="voice-model-select">语音模型</label>
+            <select id="voice-model-select" onchange="saveVoiceConfig()" class="w-full mt-2 px-3 py-2 rounded-xl bg-surface-950 border border-surface-700 text-xs text-slate-200"><option value="auto">跟随当前角色</option></select>
+            <div class="mt-3 space-y-2">
+              <label class="flex items-center gap-2.5 p-2.5 rounded-xl bg-surface-950 border border-surface-800 cursor-pointer">
+                <input type="radio" name="voice_mode_radio" value="emotion_auto" checked onchange="saveVoiceConfig()" class="accent-emerald-500 shrink-0" />
+                <div class="min-w-0">
+                  <div class="text-xs font-semibold text-slate-100">自动选择参考音频</div>
+                  <div class="text-[11px] text-slate-400">由上方情绪导师开关决定使用角色专属预设或默认基准</div>
+                </div>
+              </label>
+            </div>
+          </div>
+          <div class="mt-3">
+            <select id="voice-ref-select" onchange="saveVoiceConfig()" class="w-full px-3 py-2 rounded-xl bg-surface-950 border border-surface-700 text-xs font-mono text-slate-200 focus:outline-none focus:border-emerald-500"></select>
+          </div>
+        </div>
+      </div>
+
+      <!-- 下部两列：声学采样精调滑块 + 实时在线试音台 -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <!-- 声学采样参数滑块 (5 cols) -->
+        <div class="lg:col-span-5 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5 space-y-4">
+          <div class="flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <h3 class="text-sm font-bold text-slate-100">声学采样参数实时调控</h3>
+              <p class="text-xs text-slate-400">调节后立即作用于机器人在 QQ 群内的下一条语音回复。</p>
+            </div>
+            <button onclick="resetVoiceParams()" class="tactile-btn px-2.5 py-1 rounded-lg border border-surface-700 bg-surface-850 text-[11px] font-mono text-slate-300 shrink-0 whitespace-nowrap">恢复默认</button>
+          </div>
+
+          <div class="space-y-3 pt-1">
+            <div>
+              <div class="flex justify-between text-xs font-mono mb-1">
+                <span class="text-slate-300">语速倍率 (speed_factor)</span>
+                <span id="val-voice-speed" class="text-emerald-400">1.00x</span>
+              </div>
+              <input id="slider-voice-speed" type="range" min="0.70" max="1.40" step="0.02" value="1.00" oninput="document.getElementById('val-voice-speed').innerText=parseFloat(this.value).toFixed(2)+'x'" onchange="saveVoiceConfig()" class="w-full" />
+            </div>
+
+            <div>
+              <div class="flex justify-between text-xs font-mono mb-1">
+                <span class="text-slate-300">情绪起伏温度 (temperature)</span>
+                <span id="val-voice-temp" class="text-emerald-400">0.90</span>
+              </div>
+              <input id="slider-voice-temp" type="range" min="0.40" max="1.30" step="0.05" value="0.90" oninput="document.getElementById('val-voice-temp').innerText=parseFloat(this.value).toFixed(2)" onchange="saveVoiceConfig()" class="w-full" />
+            </div>
+
+            <div>
+              <div class="flex justify-between text-xs font-mono mb-1">
+                <span class="text-slate-300">采样收敛度 (top_p)</span>
+                <span id="val-voice-topp" class="text-emerald-400">0.95</span>
+              </div>
+              <input id="slider-voice-topp" type="range" min="0.50" max="1.00" step="0.05" value="0.95" oninput="document.getElementById('val-voice-topp').innerText=parseFloat(this.value).toFixed(2)" onchange="saveVoiceConfig()" class="w-full" />
+            </div>
+          </div>
+        </div>
+
+        <!-- 在线语音合成试听台 (7 cols) -->
+        <div class="lg:col-span-7 min-w-0 rounded-2xl border border-surface-700 bg-surface-900/90 p-4 sm:p-5 flex flex-col justify-between space-y-4">
+          <div>
+            <div class="flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <h3 class="text-sm font-bold text-slate-100">实时在线试音台 (Live Audition Deck)</h3>
+                <p class="text-xs text-slate-400">直接调用 9880 接口与当前声学参数合成试听音频，检验不同情绪参考音频的真实咬字与气口表现。</p>
+              </div>
+              <span id="preview-status-tag" class="font-mono text-xs text-emerald-400 shrink-0">READY</span>
+            </div>
+            <textarea id="preview-tts-text" rows="3" class="w-full mt-3 p-3 rounded-xl bg-surface-950 border border-surface-700 text-xs text-slate-100 focus:outline-none focus:border-emerald-500">哼，今天算你表现不错！不过别得意太早，早点休息，明天还有新的委托等着我们呢。</textarea>
+          </div>
+
+          <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <audio id="preview-audio-player" controls class="h-9 flex-1 min-w-[180px] rounded-lg"></audio>
+            <button id="btn-tts-preview" onclick="runVoicePreview()" class="tactile-btn px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs whitespace-nowrap">
+              ▶ 立即合成试听
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/panel-assets/stage/vendor/three.module.js"
+      }
+    }
+  </script>
+  <script>
+    // 首屏优先：控制台渲染完成后再懒加载 3D 舞台。
+    // 移动端或低核心设备直接跳过，降级为纯控制面板。
+    (function () {
+      function shouldLoadStage() {
+        if (window.innerWidth < 768) return false;
+        if (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 2) return false;
+        return true;
+      }
+      function loadStage() {
+        if (!shouldLoadStage()) return;
+        var wrap = document.getElementById('lounge-stage-wrap');
+        if (!wrap) return;
+        import('/panel-assets/stage/main.js').catch(function (err) {
+          console.error('[stage] load failed', err);
+          wrap.classList.add('is-failed');
+        });
+      }
+      window.addEventListener('load', function () {
+        if ('requestIdleCallback' in window) requestIdleCallback(loadStage, { timeout: 1500 });
+        else setTimeout(loadStage, 600);
+      });
+    })();
+  </script>
+  <script src="/panel-assets/panel.js" defer></script>
+</body>
+</html>

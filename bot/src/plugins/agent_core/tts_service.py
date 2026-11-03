@@ -1,17 +1,21 @@
-"""GPT-SoVITS api_v2 语音合成服务（声学 DSP 与 SILK 编码已分包至 audio_dsp.py，支持分单元封嘴呜咽合成、单元内短时情绪起伏与原声声色锁定）。
-失败抛出 TTSGenerationError，由分发入口降级为文字。
+"""GPT-SoVITS api_v2 语音合成服务，支持本地归档与原生 24kHz SILK 预转码。
+失败抛出 TTSGenerationError；语音模式由分发入口记录失败并保持静默。
 """
 from __future__ import annotations
 
 import array
 import asyncio
 import base64
+import io
 import json
 import math
 import os
-import random
 import re
+import shutil
+import subprocess
+import tempfile
 import time
+import wave
 from pathlib import Path
 from typing import Any, Optional
 
@@ -21,21 +25,7 @@ from .config_manager import state
 from .errors import TTSGenerationError
 from .history_recorder import recorder, current_task_id
 from .voice_director_adapter import select_delivery
-from .audio_dsp import (
-    MAX_VOICE_DURATION_SEC,
-    NAPCAT_ADDON_PATH,
-    analyze_wav_acoustics,
-    build_whimper_unit_specs,
-    enhance_and_cap_wav_bytes as _enhance_and_cap_wav_bytes,
-    fallback_node_silk_convert,
-    is_muffled_gagged_text,
-    join_whimper_units_to_wav,
-    normalize_gagged_role,
-    shape_whimper_unit_pcm,
-    to_nasal_whimper_text,
-    wav_bytes_to_silk_bytes as _wav_bytes_to_silk_bytes,
-    wav_duration_seconds as _wav_duration_seconds,
-)
+from .voice_presets import VOICE_CANONICAL_PRESETS, resolve_character_id
 
 BOT_ROOT = Path(__file__).resolve().parents[3]
 WORKSPACE_ROOT = BOT_ROOT.parent
@@ -44,25 +34,29 @@ OUTPUT_DIR = GSV_ROOT / "output"
 OUTPUTS_DIR = GSV_ROOT / "outputs"
 ROLES_FILE = GSV_ROOT / "voice_roles.json"
 
+NAPCAT_ADDON_PATH = (
+    WORKSPACE_ROOT / "napcat" / "shell" / "native" / "ffmpeg" / "ffmpegAddon.darwin.arm64.node"
+)
+
 TTS_URL = os.getenv("TTS_URL", "http://127.0.0.1:9880/tts")
-VOICE_SAFE_MAX_CHARS = 30
-MAX_CHARS = 150
+MAX_VOICE_DURATION_SEC = 30.0
+VOICE_SAFE_MAX_CHARS = 95
+MAX_CHARS = 195
 SHORT_SYNC_THRESHOLD = 95
 FIRST_SENTENCE_MAX = 80
-TTS_DEFAULT_TIMEOUT = 600.0
+TTS_DEFAULT_TIMEOUT = 45.0
 TTS_CIRCUIT_FAILURES = 10
 TTS_CIRCUIT_COOLDOWN = 10.0
-
-# 每個呜咽单元独立挑选不同 seed，使第 1 单元与第 2/3 单元具有截然不同的语调起伏
-_GAGGED_UNIT_SEEDS = {
-    "dania": [8, 15, 16, 18, 2, 23, 31],
-    "amiya": [40, 47, 17, 69, 29, 53],
-}
 
 _TTS_MPS_LOCK = asyncio.Lock()
 _failures = 0
 _open_until = 0.0
 LAST_AUDIO_META: dict[str, Any] = {}
+_VOICE_CHECK_CACHE: dict[str, Any] = {
+    "ts": 0.0,
+    "expires_at": 0.0,
+    "res": {"tts_9880_online": False, "studio_9876_online": False},
+}
 
 
 def _resolve_audio_path(p: str) -> str:
@@ -98,7 +92,6 @@ def _clean(text: str) -> str:
 
 
 def _extract_first_sentence(text: str, max_len: int = FIRST_SENTENCE_MAX) -> str:
-    """提取开篇第一句完整语义（不超过 max_len 字）进行快速合成。"""
     s = text.strip()
     if len(s) <= max_len:
         return s
@@ -118,8 +111,7 @@ def _extract_first_sentence(text: str, max_len: int = FIRST_SENTENCE_MAX) -> str
     return s[: max_len - 1].rstrip("，,、：:") + "。"
 
 
-def _smart_trim_for_tts(text: str, max_chars: int = MAX_CHARS) -> str:
-    """智能截断超长文本至安全字数上限（保留完整句意，适配最长 30 秒语音）。"""
+def _smart_trim_for_tts(text: str, max_chars: int = VOICE_SAFE_MAX_CHARS) -> str:
     s = _clean(text)
     if not s:
         return ""
@@ -139,23 +131,168 @@ def _smart_trim_for_tts(text: str, max_chars: int = MAX_CHARS) -> str:
     return _extract_first_sentence(s, max_len=max_chars)
 
 
+def _wav_duration_seconds(wav_bytes: bytes) -> float:
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            if rate > 0:
+                return round(max(1.0, frames / float(rate)), 2)
+    except Exception:
+        pass
+    return round(max(1.0, len(wav_bytes) / 64000.0), 2)
+
+
+def _enhance_and_cap_wav_bytes(
+    wav_bytes: bytes,
+    max_duration_sec: float = MAX_VOICE_DURATION_SEC,
+) -> tuple[bytes, bytes, int]:
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        nchannels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        framerate = wf.getframerate()
+        raw_frames = wf.readframes(wf.getnframes())
+
+    if sampwidth != 2 or not raw_frames or framerate <= 0:
+        return wav_bytes, b"", 24000
+
+    samples = array.array("h")
+    samples.frombytes(raw_frames)
+    if nchannels == 2:
+        mono = array.array(
+            "h",
+            (int((samples[i] + samples[i + 1]) // 2) for i in range(0, len(samples) - 1, 2)),
+        )
+    elif nchannels > 2:
+        mono = array.array("h", (samples[i] for i in range(0, len(samples), nchannels)))
+    else:
+        mono = samples
+
+    if not mono:
+        return wav_bytes, b"", 24000
+
+    max_samples = int(framerate * max_duration_sec)
+    if len(mono) > max_samples:
+        mono = mono[:max_samples]
+        fade_len = min(int(framerate * 0.12), len(mono) // 4)
+        for idx in range(fade_len):
+            scale = float(fade_len - idx) / float(fade_len)
+            pos = len(mono) - fade_len + idx
+            mono[pos] = int(mono[pos] * scale)
+
+    n_len = len(mono)
+    mean_dc = int(sum(mono) / n_len)
+    clarified = array.array("f", [0.0] * n_len)
+    prev_x = 0.0
+    peak = 1.0
+    sum_sq = 0.0
+    pre_emph = 0.18
+    for i, val in enumerate(mono):
+        x = float(val - mean_dc)
+        y = x + pre_emph * (x - prev_x)
+        prev_x = x
+        clarified[i] = y
+        abs_y = abs(y)
+        if abs_y > peak:
+            peak = abs_y
+        sum_sq += y * y
+
+    rms = math.sqrt(sum_sq / float(n_len)) if n_len > 0 else 1.0
+    target_peak = 28500.0
+    target_rms = 5400.0
+    gain = min(target_peak / max(peak, 1.0), target_rms / max(rms, 1.0), 3.8)
+    if gain < 1.15 and peak < 24000.0:
+        gain = min(26500.0 / max(peak, 1.0), 2.4)
+
+    out_mono = array.array("h", [0] * n_len)
+    limit_ceiling = 31800.0
+    for i, y in enumerate(clarified):
+        v = y * gain
+        if v > 26000.0:
+            v = 26000.0 + (limit_ceiling - 26000.0) * math.tanh((v - 26000.0) / 8000.0)
+        elif v < -26000.0:
+            v = -26000.0 - (limit_ceiling - 26000.0) * math.tanh((-v - 26000.0) / 8000.0)
+        out_mono[i] = int(max(-32767, min(32767, round(v))))
+
+    wav_buf = io.BytesIO()
+    with wave.open(wav_buf, "wb") as wf_out:
+        wf_out.setnchannels(1)
+        wf_out.setsampwidth(2)
+        wf_out.setframerate(framerate)
+        wf_out.writeframes(out_mono.tobytes())
+    enhanced_wav = wav_buf.getvalue()
+
+    target_silk_rate = 24000
+    if framerate == target_silk_rate:
+        pcm_24k = out_mono.tobytes()
+    else:
+        ratio = float(framerate) / float(target_silk_rate)
+        out_24k_len = max(1, int(n_len / ratio))
+        arr_24k = array.array("h", [0] * out_24k_len)
+        max_idx = n_len - 1
+        for j in range(out_24k_len):
+            src_pos = j * ratio
+            idx0 = int(src_pos)
+            if idx0 >= max_idx:
+                arr_24k[j] = out_mono[max_idx]
+            else:
+                frac = src_pos - idx0
+                s0 = out_mono[idx0]
+                s1 = out_mono[idx0 + 1]
+                arr_24k[j] = int(s0 + frac * (s1 - s0))
+        pcm_24k = arr_24k.tobytes()
+
+    return enhanced_wav, pcm_24k, target_silk_rate
+
+
+def _wav_bytes_to_silk_bytes(wav_bytes: bytes, pcm_24k_bytes: bytes = b"", silk_rate: int = 24000) -> Optional[bytes]:
+    if not wav_bytes or len(wav_bytes) < 64:
+        return None
+    try:
+        import pilk
+    except ImportError:
+        return None
+
+    pcm_path = ""
+    silk_path = ""
+    try:
+        if not pcm_24k_bytes:
+            _, pcm_24k_bytes, silk_rate = _enhance_and_cap_wav_bytes(wav_bytes)
+        if not pcm_24k_bytes:
+            return None
+
+        with tempfile.NamedTemporaryFile(suffix=".pcm", delete=False) as fp_pcm:
+            fp_pcm.write(pcm_24k_bytes)
+            pcm_path = fp_pcm.name
+        silk_path = pcm_path + ".silk"
+
+        pilk.encode(pcm_path, silk_path, pcm_rate=silk_rate, tencent=True)
+        p_silk = Path(silk_path)
+        if p_silk.is_file() and p_silk.stat().st_size > 10:
+            return p_silk.read_bytes()
+    except Exception as exc:
+        logger.warning(f"WAV 转 SILK v3 失败，回退原始 WAV: {exc}")
+    finally:
+        for p in (pcm_path, silk_path):
+            if p:
+                try:
+                    Path(p).unlink(missing_ok=True)
+                except OSError:
+                    pass
+    return None
+
+
 def _save_and_convert_audio(
     wav_bytes: bytes,
     text: str,
     role_name: str,
     delivery_meta: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    """将合成出的 WAV 做温和清晰度增强与响度归一化后落盘归档，并预转码为 24kHz SILK 格式。"""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    is_muffled = bool((delivery_meta or {}).get("muffled_gag")) or is_muffled_gagged_text(text)
     try:
-        enhanced_wav, pcm_24k, silk_rate = _enhance_and_cap_wav_bytes(
-            wav_bytes,
-            max_duration_sec=MAX_VOICE_DURATION_SEC,
-            muffled=is_muffled,
-        )
+        enhanced_wav, pcm_24k, silk_rate = _enhance_and_cap_wav_bytes(wav_bytes, max_duration_sec=MAX_VOICE_DURATION_SEC)
     except Exception as exc:
         raise TTSGenerationError("音频格式校验或处理失败。") from exc
 
@@ -182,13 +319,36 @@ def _save_and_convert_audio(
         silk_path.write_bytes(silk_bytes)
         latest_silk.write_bytes(silk_bytes)
         logger.info(
-            f"已预压制 24kHz 高清 SILK 语音条: {silk_path.name} ({len(silk_bytes)} bytes, duration={duration_sec}s, muffled={is_muffled})"
+            f"已预压制 24kHz 高清 SILK 语音条: {silk_path.name} ({len(silk_bytes)} bytes, duration={duration_sec}s)"
         )
-    else:
-        raw_silk = fallback_node_silk_convert(wav_path, silk_path)
-        if raw_silk:
-            silk_bytes = raw_silk
-            latest_silk.write_bytes(raw_silk)
+    elif NAPCAT_ADDON_PATH.is_file():
+        node_bins = [
+            shutil.which("node"),
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+        ]
+        node_bin = next((b for b in node_bins if b and Path(b).is_file()), None)
+        if node_bin:
+            js_code = (
+                "const { createRequire } = require('module');"
+                f"const addon = require({json.dumps(str(NAPCAT_ADDON_PATH.resolve()))});"
+                f"Promise.resolve(addon.convertToNTSilkTct({json.dumps(str(wav_path.resolve()))}, {json.dumps(str(silk_path.resolve()))}))"
+                ".then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });"
+            )
+            try:
+                subprocess.run(
+                    [node_bin, "-e", js_code],
+                    capture_output=True,
+                    timeout=6.0,
+                    check=False,
+                )
+                if silk_path.is_file() and silk_path.stat().st_size > 50:
+                    raw_silk = silk_path.read_bytes()
+                    if b"#!SILK" in raw_silk[:16]:
+                        silk_bytes = raw_silk
+                        latest_silk.write_bytes(raw_silk)
+            except Exception as exc:
+                logger.debug(f"Node 预转码 SILK 跳过: {exc}")
 
     try:
         archived_wavs = sorted(OUTPUT_DIR.glob("tts_*.wav"), key=lambda p: p.stat().st_mtime)
@@ -205,7 +365,6 @@ def _save_and_convert_audio(
         "timestamp": ts_str,
         "role": role_name,
         "text": text,
-        "muffled_gag": is_muffled,
         "wav_path": str(wav_path.resolve()),
         "latest_wav_path": str(latest_wav.resolve()),
         "wav_bytes": len(enhanced_wav),
@@ -246,7 +405,7 @@ def list_voice_models() -> list[dict[str, Any]]:
 def resolve_voice_role(role_name: Optional[str] = None) -> str:
     from .config_manager import state
 
-    aliases = {"amiya": "阿米娅", "dania": "达妮娅", "kaltsit": "凯尔希", "assistant": "阿米娅", "none": "阿米娅"}
+    aliases = {"amiya": "阿米娅", "dania": "达妮娅", "daniya": "达妮娅", "kaltsit": "凯尔希", "assistant": "阿米娅", "none": "阿米娅"}
     wanted = role_name or getattr(state, "voice_model", "auto")
     if wanted == "auto":
         wanted = state.active_character
@@ -277,30 +436,48 @@ def _voice_candidates(info: dict[str, Any]) -> list[dict[str, Any]]:
     return [ref for ref in candidates if Path(_resolve_audio_path(ref["audio"])).is_file()]
 
 
-def _build_role_timbre_aux_refs(role_name: str, info: dict[str, Any]) -> list[str]:
-    """为封嘴模式构建锁定角色原本声色（且基频温润低气声、不触发警报高音）的辅助参考音频列表。"""
-    aux_ref_paths: list[str] = []
-    if role_name == "达妮娅":
-        # 融合达妮娅低基频低气声的 default (F0=262Hz, ZCR=1618Hz) 与 hf_025 (F0=307Hz)，压制喘气感并锁定达妮娅声线
-        for p_cand in (
-            str(info.get("ref_audio") or ""),
-            "models/dania/refs/hf_027.wav",
-            "models/dania/refs/hf_025.wav",
-            "models/dania/refs/hf_025_anchor1.wav",
-        ):
-            rp = _resolve_audio_path(p_cand)
-            if rp and Path(rp).is_file():
-                aux_ref_paths.append(rp)
-    elif role_name == "阿米娅":
-        # 阿米娅 v4 的 mel2/ge 取自 aux_ref_audio_paths 最后一项；使用平静温和的 default (F0=269Hz) 作为末尾锚点，彻底消除 CN_013 高音导致的 500Hz 防空警报感
-        for p_cand in (
-            "models/amiya/refs/CN_031.wav",
-            str(info.get("ref_audio") or ""),
-        ):
-            rp = _resolve_audio_path(p_cand)
-            if rp and Path(rp).is_file():
-                aux_ref_paths.append(rp)
-    return aux_ref_paths
+def _fast_local_delivery_select(
+    text: str,
+    role_name: str,
+    candidates: list[dict],
+    default_ref: str,
+    emotion_tag: str = "",
+) -> dict[str, Any]:
+    """单一真源本地情绪路由选择器（受 VOICE_EMOTION_ROUTING_ENABLED 与 state.voice_emotion_director_enabled 控制）。"""
+    routing_enabled = (
+        os.getenv("VOICE_EMOTION_ROUTING_ENABLED", "false").lower() in ("1", "true", "yes")
+        or bool(getattr(state, "voice_emotion_director_enabled", False))
+    )
+    if not routing_enabled or not emotion_tag:
+        return {
+            "ref_name": default_ref,
+            "speed": 1.0,
+            "pause": 0.15,
+            "decision_source": "neutral_baseline_legacy",
+            "reasoning": f"保持默认基准: {default_ref}",
+        }
+    try:
+        cid = resolve_character_id(role_name)
+    except ValueError:
+        cid = "amiya"
+    spec = VOICE_CANONICAL_PRESETS.get(cid, VOICE_CANONICAL_PRESETS["amiya"])
+    target_prefix = spec.get("tags", {}).get(emotion_tag, default_ref)
+    cand_names = [str(c.get("name") or "") for c in candidates if isinstance(c, dict)]
+    matched = default_ref
+    if target_prefix in cand_names:
+        matched = target_prefix
+    else:
+        for cn in cand_names:
+            if cn.startswith(target_prefix):
+                matched = cn
+                break
+    return {
+        "ref_name": matched,
+        "speed": 1.0,
+        "pause": 0.18,
+        "decision_source": "canonical_emotion_preset",
+        "reasoning": f"命中单一真源情绪预设 [{emotion_tag}] -> {matched}",
+    }
 
 
 async def _select_voice_delivery(
@@ -308,8 +485,7 @@ async def _select_voice_delivery(
     role_name: str,
     info: dict[str, Any],
     force_ref_name: str = "",
-    *,
-    gagged_variant: str = "A",
+    emotion_tag: str = "",
 ) -> dict[str, Any]:
     candidates = _voice_candidates(info)
     by_name = {ref["name"]: ref for ref in candidates}
@@ -319,48 +495,34 @@ async def _select_voice_delivery(
     if not by_name or neutral not in by_name:
         raise ValueError(f"{role_name} 缺少有效参考音频")
     baseline = info.get("inference", {})
-    is_muffled = is_muffled_gagged_text(text)
-    role_key = normalize_gagged_role(role_name)
-    muffled_temp, muffled_top_p = (0.80, 0.86) if role_key == "dania" else (0.76, 0.84)
     decision = {
         "ref_name": neutral,
         "speed": 1.0,
-        "temperature": muffled_temp if is_muffled else min(0.82, float(getattr(state, "voice_temperature", 0.78) or 0.78)),
-        "top_p": muffled_top_p if is_muffled else min(0.88, float(getattr(state, "voice_top_p", 0.85) or 0.85)),
-        "pause": 0.20 if is_muffled else baseline.get("fragment_interval", 0.2),
+        "temperature": min(0.82, float(getattr(state, "voice_temperature", 0.78) or 0.78)),
+        "top_p": min(0.88, float(getattr(state, "voice_top_p", 0.85) or 0.85)),
+        "pause": baseline.get("fragment_interval", 0.2),
         "decision_source": "neutral_baseline",
-        "reasoning": "分单元合成1~2s完整呜呜+换气隔断+单元内起伏" if is_muffled else "清晰饱满日常基准声线",
+        "reasoning": "清晰饱满日常基准声线",
     }
     manual_ref = (force_ref_name or "").strip()
     if manual_ref:
         if manual_ref not in by_name:
-            norm_wanted = manual_ref.replace("_", "").replace("-", "").lower()
-            matched_key = next(
-                (k for k in by_name if k.replace("_", "").replace("-", "").lower() == norm_wanted),
-                None,
-            )
-            if matched_key:
-                manual_ref = matched_key
-            else:
-                raise ValueError(f"{role_name} 不存在参考音频 {manual_ref}")
-        if is_muffled and not manual_ref.startswith("gagged_"):
-            gagged_pick = "gagged_2" if gagged_variant.upper() == "B" else "gagged_3"
-            if gagged_pick in by_name:
-                manual_ref = gagged_pick
+            raise ValueError(f"{role_name} 不存在参考音频 {manual_ref}")
         decision.update(ref_name=manual_ref, decision_source="manual_preview", reasoning="用户指定试听参考")
-    elif is_muffled:
-        wanted_ref = "gagged_2" if gagged_variant.upper() == "B" else "gagged_3"
-        gagged_pick = wanted_ref if wanted_ref in by_name else next((k for k in ("gagged_3", "gagged_2", "gagged_1") if k in by_name), neutral)
+    elif emotion_tag:
+        local_sel = _fast_local_delivery_select(text, role_name, candidates, neutral, emotion_tag=emotion_tag)
+        if local_sel.get("ref_name") in by_name:
+            decision.update(local_sel)
+    elif not getattr(state, "voice_emotion_director_enabled", False):
         decision.update(
-            ref_name=gagged_pick,
-            decision_source=f"gagged_multi_unit_{gagged_variant.upper()}",
-            reasoning=f"分单元呜咽合成(variant={gagged_variant.upper()}, ref={gagged_pick})+原声声色锚定",
+            ref_name=neutral,
+            decision_source="fast_local_rule",
+            reasoning="本地快速规则基准声线",
         )
     else:
-        normal_candidates = [c for c in candidates if not str(c.get("name") or "").startswith("gagged_")] or candidates
         selected = await select_delivery(
             text, str(info.get("voice_style") or "结合台词内容自然选择情绪与语调，吐字清楚。"),
-            role_name, normal_candidates,
+            role_name, candidates,
         )
         decision.update(selected)
 
@@ -372,25 +534,20 @@ async def _select_voice_delivery(
             return default
 
     ref = by_name[decision["ref_name"]]
-    aux_ref_paths = _build_role_timbre_aux_refs(role_name, info) if is_muffled else []
-
     params = {
         "ref_audio_path": _resolve_audio_path(ref["audio"]),
         "prompt_text": ref["text"],
         "prompt_lang": ref.get("lang", info.get("prompt_lang", "zh")),
-        "aux_ref_audio_paths": aux_ref_paths,
+        "aux_ref_audio_paths": [],
         "speed_factor": round(min(1.25, max(0.88, state.voice_speed * bounded("speed", 1.0, 0.95, 1.12))), 2),
-        "temperature": round(bounded("temperature", muffled_temp if is_muffled else 0.78, 0.68, 0.85), 2),
-        "top_p": round(bounded("top_p", muffled_top_p if is_muffled else 0.85, 0.75, 0.88), 2),
-        "fragment_interval": 0.18 if is_muffled else round(bounded("pause", 0.2, 0.16, 0.30), 2),
+        "temperature": round(bounded("temperature", 0.78, 0.68, 0.85), 2),
+        "top_p": round(bounded("top_p", 0.85, 0.75, 0.88), 2),
+        "fragment_interval": round(bounded("pause", 0.2, 0.16, 0.30), 2),
     }
     source = str(decision.get("decision_source") or "neutral_baseline")
-    if is_muffled:
-        polished = to_nasal_whimper_text(text, role_name)
-    else:
-        polished = _clean(str(decision.get("polished_text") or text))
-        if len(polished) > MAX_CHARS or re.sub(r"[\W_]", "", polished) != re.sub(r"[\W_]", "", text):
-            polished = text
+    polished = _clean(str(decision.get("polished_text") or text))
+    if len(polished) > MAX_CHARS or re.sub(r"[\W_]", "", polished) != re.sub(r"[\W_]", "", text):
+        polished = text
     meta = {
         "voice_model": role_name,
         "reference": ref["name"],
@@ -400,151 +557,12 @@ async def _select_voice_delivery(
         "speed_factor": params["speed_factor"],
         "temperature": params["temperature"],
         "top_p": params["top_p"],
-        "muffled_gag": is_muffled,
     }
     logger.info(
         f"声音导演: model={role_name}, source={source}, ref={ref['name']}, "
-        f"speed={params['speed_factor']}, temp={params['temperature']}, top_p={params['top_p']}, muffled={is_muffled}"
+        f"speed={params['speed_factor']}, temp={params['temperature']}, top_p={params['top_p']}"
     )
-    return {"params": params, "meta": meta, "text": polished, "by_name": by_name}
-
-
-async def _synthesize_gagged_multi_unit(
-    client: httpx.AsyncClient,
-    role: str,
-    info: dict[str, Any],
-    delivery: dict[str, Any],
-    raw_text: str,
-    *,
-    gagged_variant: str = "A",
-) -> tuple[bytes, dict[str, Any]]:
-    """分单元合成封嘴语音：
-    将整条封嘴语音拆成 2~3 个独立的 1.0~1.6s『呜咽单元』，每个单元使用不同 seed、不同声调组合与情绪语调单独合成，
-    经客观基频(F0)/过零率(ZCR)筛选与单元内双峰起伏调制后，在单元之间插入 0.18~0.25s 换气隔断拼接成完整音频。
-    """
-    role_key = normalize_gagged_role(role)
-    variant = (gagged_variant or "A").strip().upper()
-    num_units = 3 if variant == "C" else 2
-    unit_specs = build_whimper_unit_specs(raw_text, role=role, num_units=num_units, variant=variant)
-
-    is_v4 = str(info.get("version") or "").lower() == "v4"
-    default_steps = 6 if is_v4 else int(info.get("inference", {}).get("sample_steps", 8))
-    base_params = dict(delivery["params"])
-    by_name = delivery.get("by_name") or {}
-
-    seed_pool = list(_GAGGED_UNIT_SEEDS.get(role_key, [8, 15, 16, 40, 47]))
-    if variant == "B":
-        # 方案 B 从不同起始 seed 采样并增强单元内音高起伏
-        seed_pool = seed_pool[1:] + seed_pool[:1]
-        undul_strength = 1.25
-        pause_list = [0.23, 0.21]
-    elif variant == "C":
-        seed_pool = seed_pool[2:] + seed_pool[:2]
-        undul_strength = 1.10
-        pause_list = [0.19, 0.21]
-    else:
-        undul_strength = 1.00
-        pause_list = [0.21, 0.20]
-
-    unit_pcms: list[array.array] = []
-    unit_debug_list: list[dict[str, Any]] = []
-    sample_rate = 48000 if is_v4 else 32000
-    seed_cursor = 0
-
-    for u_idx, u_spec in enumerate(unit_specs):
-        u_text = u_spec["text"]
-        u_style = u_spec["style"]
-        u_min = float(u_spec["min_sec"])
-        u_max = float(u_spec["max_sec"])
-
-        # 不同单元可切换 gagged_3 / gagged_2 参考以增加前后单元语调反差
-        u_params = dict(base_params)
-        if u_style == "question" and "gagged_2" in by_name and variant in {"B", "C"}:
-            r2 = by_name["gagged_2"]
-            u_params["ref_audio_path"] = _resolve_audio_path(r2["audio"])
-            u_params["prompt_text"] = r2["text"]
-
-        # 单元间语速微差：抗议单元紧凑有力，委屈疑问单元略微放缓
-        if role_key == "amiya":
-            u_speed = 1.06 if u_style == "protest" else (0.98 if u_style == "question" else 1.08)
-        else:
-            u_speed = 0.98 if u_style == "protest" else (0.92 if u_style == "question" else 1.02)
-        u_params["speed_factor"] = u_speed
-
-        best_unit_pcm = array.array("h")
-        best_sr = sample_rate
-        best_score = float("inf")
-        best_meta: dict[str, Any] = {}
-
-        # 每个单元最多尝试 2 个不同 seed，客观筛选出基频适中（非防空警报）、过零率低（非喘气声）且时长在 0.95~1.7s 的单元
-        for try_idx in range(2):
-            cur_seed = seed_pool[(seed_cursor + try_idx) % len(seed_pool)]
-            payload = {
-                "text": u_text,
-                "text_lang": "zh",
-                **u_params,
-                "voice_role": role,
-                "media_type": "wav",
-                "text_split_method": "cut0",
-                "top_k": 18,
-                "sample_steps": min(10, default_steps),
-                "seed": cur_seed,
-                "parallel_infer": False,
-                "repetition_penalty": 1.22,
-            }
-            resp = await client.post(TTS_URL, json=payload)
-            if resp.status_code >= 400 or len(resp.content) < 44 or not resp.content.startswith(b"RIFF"):
-                continue
-
-            u_pcm, u_sr, u_ac = shape_whimper_unit_pcm(
-                resp.content,
-                style=u_style,
-                min_sec=u_min,
-                max_sec=u_max,
-                target_sec=float(u_spec.get("target_sec") or 1.28),
-                base_f0=float(u_spec.get("base_f0") or (276.0 if role_key == "dania" else 288.0)),
-                mark_offset_ratio=round((u_idx * 0.42) % 0.85, 2),
-                pitch_undulation=undul_strength,
-            )
-            shaped_dur = u_ac.get("shaped_duration_sec", 0.0)
-            raw_f0 = u_ac.get("median_f0_hz", 340.0)
-            raw_zcr = u_ac.get("avg_zcr_hz", 1600.0)
-
-            # 评分函数（越小越优）：惩罚时长过短(<0.85s)、高音警报(raw_f0>370Hz)与气声喘息(raw_zcr>1850Hz)
-            dur_penalty = 0.0 if (0.90 <= shaped_dur <= u_max + 0.1) else abs(shaped_dur - 1.25) * 4.0
-            f0_penalty = max(0.0, (raw_f0 - 355.0) / 40.0)
-            zcr_penalty = max(0.0, (raw_zcr - 1800.0) / 300.0)
-            score = dur_penalty + f0_penalty + zcr_penalty
-
-            logger.info(
-                f"封嘴单元[{u_idx + 1}/{len(unit_specs)}] 候选(seed={cur_seed}): "
-                f"text='{u_text}' style={u_style} shaped_dur={shaped_dur:.2f}s raw_f0={raw_f0:.1f}Hz zcr={raw_zcr:.0f}Hz score={score:.2f}"
-            )
-            if len(u_pcm) > 0 and score < best_score:
-                best_score = score
-                best_unit_pcm = u_pcm
-                best_sr = u_sr
-                best_meta = {"unit": u_idx + 1, "seed": cur_seed, "text": u_text, "style": u_style, **u_ac}
-            if score <= 0.65 and shaped_dur >= 0.95:
-                break
-
-        seed_cursor += 2
-        if len(best_unit_pcm) > 0:
-            unit_pcms.append(best_unit_pcm)
-            sample_rate = best_sr
-            unit_debug_list.append(best_meta)
-
-    if not unit_pcms:
-        raise TTSGenerationError("封嘴分单元合成未生成有效音频。")
-
-    joined_wav = join_whimper_units_to_wav(unit_pcms, sample_rate, pause_durations=pause_list)
-    extra_meta = {
-        "gagged_variant": variant,
-        "unit_count": len(unit_pcms),
-        "pause_durations_sec": pause_list[: max(0, len(unit_pcms) - 1)],
-        "units": unit_debug_list,
-    }
-    return joined_wav, extra_meta
+    return {"params": params, "meta": meta, "text": polished}
 
 
 def list_voice_refs(role_name: Optional[str] = None) -> list[dict[str, Any]]:
@@ -569,8 +587,11 @@ def list_voice_refs(role_name: Optional[str] = None) -> list[dict[str, Any]]:
         return []
 
 
-async def check_voice_services() -> dict[str, bool]:
-    """检测 9880 (GPT-SoVITS API) 与 9876 (Voice Studio Pro) 是否在线。"""
+async def check_voice_services(force_refresh: bool = False) -> dict[str, bool]:
+    """检测 9880 (GPT-SoVITS API) 与 9876 (Voice Studio Pro) 是否在线（带 5.0 秒 TTL 内存缓存）。"""
+    now = time.monotonic()
+    if not force_refresh and now < float(_VOICE_CHECK_CACHE.get("expires_at", 0.0)):
+        return dict(_VOICE_CHECK_CACHE["res"])
     tts_ok = False
     studio_ok = False
     try:
@@ -587,7 +608,11 @@ async def check_voice_services() -> dict[str, bool]:
                 studio_ok = False
     except Exception:
         pass
-    return {"tts_9880_online": tts_ok, "studio_9876_online": studio_ok}
+    res = {"tts_9880_online": tts_ok, "studio_9876_online": studio_ok}
+    _VOICE_CHECK_CACHE["ts"] = now
+    _VOICE_CHECK_CACHE["expires_at"] = now + 5.0
+    _VOICE_CHECK_CACHE["res"] = res
+    return dict(res)
 
 
 def _report_tts_progress(
@@ -618,79 +643,65 @@ async def synthesize(
     timeout: float = TTS_DEFAULT_TIMEOUT,
     truncate_long: bool = True,
     force_ref_name: str = "",
+    emotion_tag: str = "",
     prefer_wav: bool = False,
-    gagged_variant: str = "A",
+    latency_mode: bool = False,
 ) -> str:
-    """整个语音阶段共用一个预算，包括排锁、AI 情绪选择、分单元封嘴合成（或常规合成）、归档与编码。"""
+    """整个语音阶段共用一个预算，包括排锁、AI 情绪选择、请求、归档与编码。"""
     global _failures, _open_until
     if time.monotonic() < _open_until:
-        raise TTSGenerationError("语音熔断保护中，改用文字。")
+        raise TTSGenerationError("语音熔断保护中，本轮语音未生成。")
+    started = time.perf_counter()
     try:
-        raw_to = float(timeout if timeout is not None else TTS_DEFAULT_TIMEOUT)
-        eff_timeout = raw_to if (math.isfinite(raw_to) and raw_to > 0) else TTS_DEFAULT_TIMEOUT
+        eff_timeout = TTS_DEFAULT_TIMEOUT if float(timeout) == 8.0 else max(0.01, float(timeout))
         async with asyncio.timeout(eff_timeout):
             async with _TTS_MPS_LOCK:
+                lock_acquired = time.perf_counter()
                 role = resolve_voice_role(role_name)
                 cleaned = _smart_trim_for_tts(text, VOICE_SAFE_MAX_CHARS if truncate_long else MAX_CHARS)
                 if not cleaned or not re.search(r"[\w\u4e00-\u9fff]", cleaned):
                     raise TTSGenerationError("没有可播放的语音文本。")
-                is_muffled_in = is_muffled_gagged_text(cleaned)
-                if is_muffled_in:
-                    cleaned = to_nasal_whimper_text(cleaned, role)
                 info = _load_role_refs(role)
-                delivery = await _select_voice_delivery(
-                    cleaned, role, info, force_ref_name, gagged_variant=gagged_variant
-                )
+                delivery = await _select_voice_delivery(cleaned, role, info, force_ref_name, emotion_tag=emotion_tag)
+                delivery_selected = time.perf_counter()
                 cleaned = _smart_trim_for_tts(delivery["text"], VOICE_SAFE_MAX_CHARS if truncate_long else MAX_CHARS)
                 if not cleaned:
                     raise TTSGenerationError("声音导演返回了空台词。")
                 params = delivery["params"]
-                is_v4 = str(info.get("version") or "").lower() == "v4"
-                is_muffled_now = bool(delivery["meta"].get("muffled_gag")) or is_muffled_in or is_muffled_gagged_text(cleaned)
-                default_steps = 4 if is_v4 else int(info.get("inference", {}).get("sample_steps", 8))
-
+                use_cut0 = latency_mode or (
+                    os.getenv("VOICE_ADAPTIVE_CUT0_ENABLED", "false").lower() in ("1", "true", "yes")
+                    and len(cleaned) <= 22
+                )
+                role_inference = info.get("inference", {})
+                payload = {
+                    "text": cleaned,
+                    "text_lang": "zh",
+                    **params,
+                    "voice_role": role,
+                    "media_type": "wav",
+                    "text_split_method": "cut0" if use_cut0 else os.getenv("TTS_SPLIT", "cut5"),
+                    # MPS 下多句并行会争抢 GPU，实测串行比并行快 2~7 倍，必须保持关闭。
+                    "parallel_infer": False,
+                    "top_k": min(8, int(role_inference.get("top_k", 12))) if latency_mode else int(role_inference.get("top_k", 12)),
+                    "sample_steps": min(4, int(role_inference.get("sample_steps", 8))) if latency_mode else min(10, int(role_inference.get("sample_steps", 8))),
+                    "seed": -1,
+                    "repetition_penalty": float(info.get("inference", {}).get("repetition_penalty", 1.35)),
+                }
                 _report_tts_progress("正在合成语音", 45, input_text=cleaned)
-                async with httpx.AsyncClient(
-                    trust_env=False,
-                    timeout=httpx.Timeout(eff_timeout, connect=min(2.0, eff_timeout)),
-                ) as client:
-                    if is_muffled_now:
-                        best_content, gagged_extra = await _synthesize_gagged_multi_unit(
-                            client, role, info, delivery, text, gagged_variant=gagged_variant
-                        )
-                        delivery["meta"].update(gagged_extra)
-                    else:
-                        payload = {
-                            "text": cleaned,
-                            "text_lang": "zh",
-                            **params,
-                            "voice_role": role,
-                            "media_type": "wav",
-                            "text_split_method": os.getenv("TTS_SPLIT", "cut2"),
-                            "top_k": int(info.get("inference", {}).get("top_k", 12)),
-                            "sample_steps": min(10, default_steps),
-                            "seed": -1,
-                            "repetition_penalty": float(info.get("inference", {}).get("repetition_penalty", 1.35)),
-                        }
-                        response = await client.post(TTS_URL, json=payload)
-                        if response.status_code == 400 and re.search(r"[a-zA-Z]", cleaned):
-                            fallback_clean = re.sub(r"[a-zA-Z0-9]+", "", cleaned).strip("，, ")
-                            if fallback_clean and re.search(r"[\u4e00-\u9fff]", fallback_clean):
-                                logger.warning(f"TTS 400 异常，检测到混合英文，尝试纯中文降级重试: {fallback_clean[:30]}")
-                                payload["text"] = fallback_clean
-                                response = await client.post(TTS_URL, json=payload)
-                        if response.status_code >= 400:
-                            err_detail = response.text[:200]
-                            logger.error(f"TTS 9880 接口异常 HTTP {response.status_code}: {err_detail}")
-                            raise TTSGenerationError(f"TTS 9880 接口返回错误 HTTP {response.status_code}: {err_detail}")
-                        response.raise_for_status()
-                        best_content = response.content
-
-                if len(best_content) < 44 or not best_content.startswith(b"RIFF") or best_content[8:12] != b"WAVE":
+                async with httpx.AsyncClient(trust_env=False, timeout=httpx.Timeout(eff_timeout, connect=min(2.0, eff_timeout))) as client:
+                    response = await client.post(TTS_URL, json=payload)
+                    response.raise_for_status()
+                audio_received = time.perf_counter()
+                if len(response.content) < 44 or not response.content.startswith(b"RIFF") or response.content[8:12] != b"WAVE":
                     raise TTSGenerationError("语音服务未返回有效 WAV。")
-                saved = await asyncio.to_thread(_save_and_convert_audio, best_content, cleaned, role, delivery["meta"])
+                saved = await asyncio.to_thread(_save_and_convert_audio, response.content, cleaned, role, delivery["meta"])
+                logger.info(
+                    f"TTS阶段耗时 role={role} lock={lock_acquired-started:.3f}s "
+                    f"director={delivery_selected-lock_acquired:.3f}s infer={audio_received-delivery_selected:.3f}s "
+                    f"encode={time.perf_counter()-audio_received:.3f}s total={time.perf_counter()-started:.3f}s"
+                )
                 if not prefer_wav and (not saved["is_silk"] or not saved["send_bytes"].startswith((b"\x02#!SILK_V3", b"#!SILK_V3"))):
-                    raise TTSGenerationError("SILK 编码失败，改用文字。")
+                    raise TTSGenerationError("SILK 编码失败，语音未能发送。")
                 result = saved["wav_bytes"] if prefer_wav else saved["send_bytes"]
                 if not result:
                     raise TTSGenerationError("音频载荷为空。")
@@ -703,7 +714,7 @@ async def synthesize(
         _failures += 1
         if _failures >= TTS_CIRCUIT_FAILURES:
             _open_until = time.monotonic() + TTS_CIRCUIT_COOLDOWN
-        logger.warning(f"Degradation stage=tts type={type(exc).__name__} failures={_failures} detail={exc}")
+        logger.warning(f"Degradation stage=tts type={type(exc).__name__} failures={_failures}")
         if isinstance(exc, TTSGenerationError):
             raise
-        raise TTSGenerationError(f"TTS合成异常: {type(exc).__name__} - {exc}") from exc
+        raise TTSGenerationError() from exc

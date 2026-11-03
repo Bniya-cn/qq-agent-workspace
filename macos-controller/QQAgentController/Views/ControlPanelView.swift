@@ -513,18 +513,23 @@ struct ControlPanelView: View {
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("AI 情绪路由")
-                            .font(.system(size: 11, weight: .semibold))
-                        HStack(spacing: 8) {
-                            modeSelectButton(
-                                title: "按完整回复选择情绪",
-                                subtitle: "AI 选择当前模型的参考音频；普通称呼不会触发睡前音色",
-                                active: true
-                            ) {
-                                api.updateVoiceConfig(voiceMode: "emotion_auto")
-                            }
+                    Divider().overlay(borderSubtle)
+
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("AI 情绪导师 (极速单轮路由)")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text("开启后大模型首轮生成情绪标签并 0ms 本地匹配音色；关闭后保持默认基准音色")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
                         }
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { api.voiceEmotionDirectorEnabled },
+                            set: { api.updateVoiceConfig(voiceEmotionDirectorEnabled: $0) }
+                        ))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
                     }
 
                     if !api.voiceRefs.isEmpty {

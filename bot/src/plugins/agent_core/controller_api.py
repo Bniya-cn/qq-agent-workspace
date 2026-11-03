@@ -24,6 +24,8 @@ from . import doc_service
 from . import tts_service
 from . import llm_service
 from . import modes
+from .autonomous_agent import autonomous_coordinator
+from .user_memory_service import user_memory_store
 
 
 class GlobalSwitchReq(BaseModel):
@@ -64,6 +66,7 @@ class VoiceConfigReq(BaseModel):
     tts_enabled: Optional[bool] = None
     voice_only_reply: Optional[bool] = None
     voice_mode: Optional[str] = None  # "emotion_auto" | "fixed_ref"
+    voice_emotion_director_enabled: Optional[bool] = None
     voice_ref_name: Optional[str] = None
     voice_speed: Optional[float] = None
     voice_temperature: Optional[float] = None
@@ -131,6 +134,20 @@ async def _parse_any_request_payload(request: Request) -> dict[str, Any]:
     except Exception:
         pass
     return payload
+
+
+def _parse_bool(val: Any, default: bool = True) -> bool:
+    """万能安全布尔解析，彻底防止字符串 'false'/'0' 意外解析为 True。"""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().lower()
+    if s in ("false", "0", "no", "off"):
+        return False
+    if s in ("true", "1", "yes", "on"):
+        return True
+    return bool(val)
 
 
 async def _handle_send_docs_request(request: Request) -> dict[str, Any]:
@@ -281,6 +298,7 @@ async def _build_full_status(include_history: bool = False) -> dict[str, Any]:
     )
     payload: dict[str, Any] = {
         "global_active": state.global_active,
+        "accept_poke": getattr(state, "accept_poke", True),
         "active_character": state.active_character,
         "active_groups": state.active_groups,
         "comfort_targets": state.comfort_mode_targets,
@@ -290,6 +308,7 @@ async def _build_full_status(include_history: bool = False) -> dict[str, Any]:
         "tts_enabled": state.voice_enabled,
         "voice_only_reply": state.voice_only_reply,
         "voice_mode": state.voice_mode,
+        "voice_emotion_director_enabled": state.voice_emotion_director_enabled,
         "voice_ref_name": state.voice_ref_name,
         "voice_speed": state.voice_speed,
         "voice_temperature": state.voice_temperature,
@@ -303,8 +322,9 @@ async def _build_full_status(include_history: bool = False) -> dict[str, Any]:
             "studio_url": "http://127.0.0.1:9876",
         },
         "voice_refs": tts_service.list_voice_refs(),
-        "saved_refs": _list_saved_refs(),
-        "character_refs": _list_saved_refs(),
+        "saved_refs": [],
+        "saved_refs_count": len(_list_saved_refs()),
+        "character_refs": [],
         "group_personas": _list_group_personas(),
         "exported_files": doc_service.list_exported_files(limit=20),
         "progress_tasks": progress_tracker.list_recent(),
@@ -314,17 +334,33 @@ async def _build_full_status(include_history: bool = False) -> dict[str, Any]:
         "small_talk_mode": state.small_talk_mode,
         "small_talk_style": getattr(state, "small_talk_style", "pure_persona"),
         "auto_reply_mode": getattr(state, "auto_reply_mode", True),
-        "reply_interval_seconds": getattr(state, "reply_interval_seconds", 3.0),
+        "reply_interval_seconds": getattr(state, "reply_interval_seconds", 1.5),
         "training_mode": state.training_mode,
         "training_groups": state.training_groups,
         "group_user_whitelist_enabled": getattr(state, "group_user_whitelist_enabled", False),
         "group_user_whitelists": getattr(state, "group_user_whitelists", {}),
         "superuser_qq": state.superuser_qq,
-        "training_status": modes.get_training_status() if hasattr(modes, "get_training_status") else {},
+        "training_status": (await modes.get_training_status_async()) if hasattr(modes, "get_training_status_async") else (modes.get_training_status() if hasattr(modes, "get_training_status") else {}),
+        "autonomous_status": autonomous_coordinator.get_status(),
+        "group_config_scope": "global_default",
+        "group_buffer_enabled": state.group_buffer_enabled,
+        "group_merge_window_sec": state.group_merge_window_sec,
+        "group_merge_max_messages": state.group_merge_max_messages,
+        "group_merge_max_chars": state.group_merge_max_chars,
+        "group_quota_min_interval_sec": state.group_quota_min_interval_sec,
+        "group_quota_max_per_minute": state.group_quota_max_per_minute,
+        "group_chunk_pace_sec": state.group_chunk_pace_sec,
+        "amiya_sticker_enabled": getattr(state, "amiya_sticker_enabled", True),
+        "amiya_sticker_min_delay_sec": getattr(state, "amiya_sticker_min_delay_sec", 1.0),
+        "amiya_sticker_max_delay_sec": getattr(state, "amiya_sticker_max_delay_sec", 20.0),
+        "image_gen_route": getattr(state, "image_gen_route", "qwen"),
+        "friend_comfy_workflow": getattr(state, "friend_comfy_workflow", "sdxl"),
+        "friend_comfy_url": getattr(state, "friend_comfy_url", "http://node.tail3189e0.ts.net:8100"),
     }
     if include_history:
         payload["recent_logs"] = recorder.get_logs()
         payload["recent_dialogues"] = recorder.get_dialogues()
+        payload["profiles_summary"] = user_memory_store.list_profiles_summary(limit=25)
     return payload
 
 
@@ -339,8 +375,59 @@ def _register_routes(app: FastAPI, services) -> None:
         @app.get("/", response_class=HTMLResponse)
         @app.get("/panel", response_class=HTMLResponse)
         async def get_web_panel() -> HTMLResponse:
-            from . import web_panel
-            return HTMLResponse(content=web_panel.PANEL_HTML)
+            try:
+                from . import web_panel
+                content = web_panel.get_panel_html()
+                return HTMLResponse(
+                    content=content,
+                    headers={
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "Pragma": "no-cache",
+                        "Expires": "0",
+                    },
+                )
+            except Exception as exc:
+                import traceback
+                err_tb = traceback.format_exc()
+                logger.error(f"[ControllerAPI] 渲染 Web 控制面板失败: {exc}\n{err_tb}")
+                diag_html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>PRTS 控制台诊断</title></head>
+<body style="background:#090a0f;color:#e2e8f0;font-family:monospace;padding:24px;">
+  <h2 style="color:#ef4444;">⚠️ PRTS 控制台中枢加载异常</h2>
+  <p><strong>异常详情:</strong> {exc}</p>
+  <pre style="background:#1e293b;padding:12px;border-radius:6px;color:#f87171;overflow:auto;">{err_tb}</pre>
+  <p><a href="/api/dashboard" style="color:#38bdf8;">👉 点击直达 /api/dashboard 接口数据</a></p>
+</body>
+</html>"""
+                return HTMLResponse(content=diag_html, status_code=500)
+
+    if "/panel-assets/{file_path:path}" not in existing_paths:
+        @app.get("/panel-assets/{file_path:path}")
+        async def get_panel_asset(file_path: str) -> FileResponse:
+            from .web_panel import WEB_ROOT
+            root = WEB_ROOT.resolve()
+            target = (root / file_path).resolve()
+            # 只允许 WEB_ROOT 内部的真实文件，阻止路径穿越
+            if root not in target.parents and target != root:
+                raise HTTPException(status_code=404)
+            if not target.is_file():
+                raise HTTPException(status_code=404)
+            media_types = {
+                ".js": "application/javascript",
+                ".css": "text/css",
+                ".glb": "model/gltf-binary",
+                ".gltf": "model/gltf+json",
+                ".wasm": "application/wasm",
+                ".json": "application/json",
+                ".html": "text/html",
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".svg": "image/svg+xml",
+            }
+            media_type = media_types.get(target.suffix.lower(), "application/octet-stream")
+            return FileResponse(target, media_type=media_type, headers={"Cache-Control": "no-store"})
 
     if "/api/status" not in existing_paths:
         @app.get("/api/status")
@@ -414,6 +501,8 @@ def _register_routes(app: FastAPI, services) -> None:
                 state.voice_only_reply = req.voice_only_reply
             if req.voice_mode in {"emotion_auto", "fixed_ref"}:
                 state.voice_mode = req.voice_mode
+            if req.voice_emotion_director_enabled is not None:
+                state.voice_emotion_director_enabled = req.voice_emotion_director_enabled
             if req.voice_ref_name is not None:
                 state.voice_ref_name = req.voice_ref_name.strip() or "default"
             if req.voice_speed is not None:
@@ -430,52 +519,252 @@ def _register_routes(app: FastAPI, services) -> None:
                 "tts_enabled": state.voice_enabled,
                 "voice_only_reply": state.voice_only_reply,
                 "voice_mode": state.voice_mode,
+                "voice_emotion_director_enabled": state.voice_emotion_director_enabled,
                 "voice_ref_name": state.voice_ref_name,
                 "voice_speed": state.voice_speed,
                 "voice_temperature": state.voice_temperature,
                 "voice_top_p": state.voice_top_p,
             }
 
-    if "/api/voice/service" not in existing_paths:
-        @app.post("/api/voice/service")
-        async def control_voice_service(req: VoiceServiceReq) -> dict[str, Any]:
-            gsv_root = BOT_ROOT.parent / "gpt-sovits"
-            raw_target = (req.service or req.target or "9880").strip().lower()
-            target = "9876" if "9876" in raw_target or "studio" in raw_target else "9880"
-            action = req.action.strip().lower()
+    if "/api/image/cache/{filename}" not in existing_paths:
+        @app.get("/api/image/cache/{filename}")
+        async def get_cached_generated_image(filename: str) -> FileResponse:
+            safe_name = Path(filename).name
+            cache_dir = BOT_ROOT / "data" / "cache" / "images"
+            target = (cache_dir / safe_name).resolve()
+            if cache_dir.resolve() not in target.parents or not target.is_file():
+                raise HTTPException(status_code=404, detail="缓存图片不存在")
+            media_type = "image/jpeg" if target.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
+            return FileResponse(target, media_type=media_type, headers={"Cache-Control": "public, max-age=3600"})
+
+    if "/api/switch/image_route" not in existing_paths:
+        @app.get("/api/switch/image_route")
+        @app.post("/api/switch/image_route")
+        async def switch_image_generation_route(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            raw_route = payload.get("route") or payload.get("image_gen_route")
+            raw_wf = payload.get("workflow") or payload.get("friend_comfy_workflow")
+            raw_url = payload.get("friend_comfy_url")
+            if raw_route is not None:
+                state.image_gen_route = str(raw_route).strip().lower()
+            if raw_wf is not None:
+                state.friend_comfy_workflow = str(raw_wf).strip().lower()
+            if raw_url is not None and str(raw_url).strip():
+                state.friend_comfy_url = str(raw_url).strip()
+            await state.save()
+            route_label = (
+                f"朋友 ComfyUI ({state.friend_comfy_workflow.upper()})"
+                if state.image_gen_route == "friend_comfy"
+                else "阿里 Qwen 生图 (qwen-image-2.1-pro)"
+            )
+            recorder.log(f"[生图路线切换] 已切换至: {route_label}")
+            return {
+                "code": 0,
+                "status": "ok",
+                "image_gen_route": state.image_gen_route,
+                "friend_comfy_workflow": state.friend_comfy_workflow,
+                "friend_comfy_url": state.friend_comfy_url,
+                "route_label": route_label,
+            }
+
+    if "/api/image/comfy_status" not in existing_paths:
+        @app.get("/api/image/comfy_status")
+        async def get_friend_comfy_status() -> dict[str, Any]:
+            st = await llm_service.check_friend_comfy_status()
+            return {"code": 0 if st.get("online") else 1, **st}
+
+    if "/api/image/test_generate" not in existing_paths:
+        @app.get("/api/image/test_generate")
+        @app.post("/api/image/test_generate")
+        async def test_image_generation_route(request: Request) -> dict[str, Any]:
+            import re
+            payload = await _parse_any_request_payload(request)
+            route = str(payload.get("route") or state.image_gen_route or "qwen").strip().lower()
+            workflow = str(payload.get("workflow") or state.friend_comfy_workflow or "sdxl").strip().lower()
+            prompt = str(
+                payload.get("prompt")
+                or "生成一张达妮娅穿婚纱的图，焦距85mm，f1.8,1/200s快门，iso400，室内礼堂"
+            ).strip()
+            use_ref = _parse_bool(payload.get("use_ref"), True)
+            t0 = time.time()
+            task_id = uuid.uuid4().hex
+            progress_tracker.update(
+                task_id,
+                kind="image",
+                title=f"🎨 生图路线实测 ({'朋友ComfyUI' if route in {'friend_comfy', 'comfy', 'comfyui', 'friend'} else '阿里Qwen'})",
+                status="running",
+                stage="正在准备参考图与提示词...",
+                percent=15,
+                input_text=prompt,
+            )
             try:
-                if target == "9880":
-                    if action == "start":
+                with task_scope(task_id):
+                    ds_key = (os.getenv("DASHSCOPE_API_KEY") or "").strip()
+                    refs = llm_service._load_local_character_refs(prompt, max_refs=1) if use_ref else []
+                    extra_traits = ""
+                    prompt_key = ds_key or (os.getenv("DEEPSEEK_API_KEY") or "").strip()
+                    if refs:
+                        extra_traits = await llm_service.extract_character_visual_traits(
+                            prompt_key, refs[0], prompt, reference_role="identity", reference_images=refs
+                        )
+                    else:
+                        extra_traits = await llm_service.search_character_visual_sheet(prompt_key, prompt)
+                    reply = await llm_service.generate_image_with_qwen_or_wan(
+                        api_key=ds_key,
+                        user_prompt=prompt,
+                        image_b64_list=refs,
+                        character=state.active_character or "amiya",
+                        visual_traits=extra_traits,
+                        reference_role="identity" if refs else "edit",
+                        route_override=route,
+                        workflow_override=workflow,
+                    )
+                dur = round(time.time() - t0, 2)
+                m_url = re.search(r"!\[.*?\]\((https?://[^\s\)]+)\)", reply or "")
+                img_url = m_url.group(1) if m_url else ""
+                progress_tracker.update(
+                    task_id, status="done", percent=100, stage=f"测试生图完成 ({dur}s)", output_text=img_url
+                )
+                return {
+                    "code": 0,
+                    "status": "ok",
+                    "route": route,
+                    "workflow": workflow,
+                    "duration_sec": dur,
+                    "prompt": prompt,
+                    "used_refs_count": len(refs),
+                    "image_url": img_url,
+                    "reply": reply,
+                }
+            except Exception as exc:
+                dur = round(time.time() - t0, 2)
+                progress_tracker.update(
+                    task_id, status="error", percent=100, stage=f"测试生图失败: {exc}"
+                )
+                return {
+                    "code": 1,
+                    "status": "error",
+                    "route": route,
+                    "workflow": workflow,
+                    "duration_sec": dur,
+                    "prompt": prompt,
+                    "error": str(exc),
+                }
+
+    if "/api/sticker/config" not in existing_paths:
+        @app.get("/api/sticker/config")
+        async def get_sticker_config() -> dict[str, Any]:
+            return {
+                "code": 0,
+                "status": "ok",
+                "amiya_sticker_enabled": getattr(state, "amiya_sticker_enabled", True),
+                "amiya_sticker_min_delay_sec": getattr(state, "amiya_sticker_min_delay_sec", 1.0),
+                "amiya_sticker_max_delay_sec": getattr(state, "amiya_sticker_max_delay_sec", 20.0),
+            }
+
+        @app.post("/api/sticker/config")
+        async def update_sticker_config(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            try:
+                enabled = _parse_bool(
+                    payload.get("amiya_sticker_enabled"),
+                    getattr(state, "amiya_sticker_enabled", True),
+                )
+                min_delay = float(payload.get(
+                    "amiya_sticker_min_delay_sec",
+                    getattr(state, "amiya_sticker_min_delay_sec", 1.0),
+                ))
+                max_delay = float(payload.get(
+                    "amiya_sticker_max_delay_sec",
+                    getattr(state, "amiya_sticker_max_delay_sec", 20.0),
+                ))
+            except (TypeError, ValueError) as exc:
+                return {"code": 1, "status": "error", "message": f"表情包参数格式错误: {exc}"}
+            if not (1.0 <= min_delay <= 20.0 and 1.0 <= max_delay <= 20.0):
+                return {"code": 1, "status": "error", "message": "表情包延迟必须在 1 ~ 20 秒之间"}
+            if min_delay > max_delay:
+                return {"code": 1, "status": "error", "message": "最短延迟不能大于最长延迟"}
+
+            state.amiya_sticker_enabled = enabled
+            state.amiya_sticker_min_delay_sec = min_delay
+            state.amiya_sticker_max_delay_sec = max_delay
+            await state.save()
+            return {
+                "code": 0,
+                "status": "ok",
+                "amiya_sticker_enabled": state.amiya_sticker_enabled,
+                "amiya_sticker_min_delay_sec": state.amiya_sticker_min_delay_sec,
+                "amiya_sticker_max_delay_sec": state.amiya_sticker_max_delay_sec,
+            }
+
+    if "/api/voice/service" not in existing_paths:
+        @app.get("/api/voice/service")
+        @app.post("/api/voice/service")
+        async def control_voice_service(
+            req: Optional[VoiceServiceReq] = None,
+            target: str = "9880",
+            action: str = "restart",
+        ) -> dict[str, Any]:
+            gsv_root = BOT_ROOT.parent / "gpt-sovits"
+            raw_target = ((req.service or req.target) if req else target or "9880").strip().lower()
+            act = (req.action if req else action or "restart").strip().lower()
+            target_clean = "9876" if "9876" in raw_target or "studio" in raw_target else "9880"
+            try:
+                if target_clean == "9880":
+                    if act == "start":
                         script = gsv_root / "scripts" / "start_api.sh"
                         if script.is_file():
                             subprocess.Popen(["/bin/bash", str(script)], cwd=str(gsv_root))
                             return {"code": 0, "message": "已发出 9880 语音 API 启动指令"}
-                    else:
+                    elif act == "stop":
                         subprocess.Popen(["/usr/bin/pkill", "-f", "api_v2.py"])
                         return {"code": 0, "message": "已停止 9880 语音 API"}
-                elif target == "9876":
-                    if action == "start":
+                    elif act == "restart":
+                        subprocess.Popen(["/usr/bin/pkill", "-f", "api_v2.py"])
+                        await asyncio.sleep(1.2)
+                        script = gsv_root / "scripts" / "start_api.sh"
+                        if script.is_file():
+                            subprocess.Popen(["/bin/bash", str(script)], cwd=str(gsv_root))
+                        return {"code": 0, "message": "已重新启动 9880 语音 API"}
+                elif target_clean == "9876":
+                    if act == "start":
                         script = gsv_root / "scripts" / "start_studio.sh"
                         if script.is_file():
                             subprocess.Popen(["/bin/bash", str(script)], cwd=str(gsv_root))
                             return {"code": 0, "message": "已发出 9876 语音工作室启动指令"}
-                    else:
+                    elif act == "stop":
                         subprocess.Popen(["/usr/bin/pkill", "-f", "voice_studio.py"])
                         return {"code": 0, "message": "已停止 9876 语音工作室"}
+                    elif act == "restart":
+                        subprocess.Popen(["/usr/bin/pkill", "-f", "voice_studio.py"])
+                        await asyncio.sleep(1.2)
+                        script = gsv_root / "scripts" / "start_studio.sh"
+                        if script.is_file():
+                            subprocess.Popen(["/bin/bash", str(script)], cwd=str(gsv_root))
+                        return {"code": 0, "message": "已重新启动 9876 语音工作室"}
             except Exception as exc:
                 return {"code": 1, "message": f"操作失败: {exc}"}
             return {"code": 1, "message": "未找到对应语音启动脚本"}
 
     if "/api/voice/preview" not in existing_paths:
+        @app.get("/api/voice/preview")
         @app.post("/api/voice/preview")
-        async def preview_voice_tts(req: VoicePreviewReq) -> dict[str, Any]:
+        async def preview_voice_tts(
+            req: Optional[VoicePreviewReq] = None,
+            text: str = "哼，今天算你表现不错！记得早点休息。",
+            character: str = "达妮娅",
+            ref_name: str = "",
+        ) -> dict[str, Any]:
+            target_text = req.text if req else (text or "哼，今天算你表现不错！记得早点休息。")
+            target_role = (req.voice_model or req.character) if req else (character or "达妮娅")
+            target_ref = (req.ref_name if req else ref_name or "").strip()
             task_id = uuid.uuid4().hex
-            progress_tracker.update(task_id, kind="voice", status="running", stage="生成试听", input_text=req.text)
+            progress_tracker.update(task_id, kind="voice", status="running", stage="生成试听", input_text=target_text)
             try:
                 with task_scope(task_id):
                     b64_rec = await tts_service.synthesize(
-                        req.text, role_name=req.voice_model or req.character or "达妮娅",
-                        timeout=600.0, truncate_long=False, force_ref_name=req.ref_name.strip(), prefer_wav=True,
+                        target_text, role_name=target_role,
+                        timeout=600.0, truncate_long=False, force_ref_name=target_ref, prefer_wav=True,
                     )
                 progress_tracker.update(task_id, status="done", percent=100, stage="试听音频已生成")
             except asyncio.CancelledError:
@@ -495,16 +784,17 @@ def _register_routes(app: FastAPI, services) -> None:
 
     if "/api/voice/test" not in existing_paths:
         @app.get("/api/voice/test")
-        async def test_voice_tts_endpoint() -> dict[str, Any]:
+        async def test_voice_tts_endpoint(role: Optional[str] = None) -> dict[str, Any]:
             t0 = time.time()
-            text = "博士，阿米娅在这里哦！"
+            target_role = (role or state.active_character or "阿米娅").strip()
+            text = "博士，今天辛苦啦！" if target_role in ("阿米娅", "amiya") else "哼，今天算你表现不错！"
             task_id = uuid.uuid4().hex
             progress_tracker.update(task_id, kind="voice", status="pending", stage="准备语音测试")
             try:
                 with task_scope(task_id):
                     progress_tracker.update(task_id, status="running", stage="测试语音合成")
                     b64_rec = await tts_service.synthesize(
-                        text, role_name=state.active_character or "阿米娅",
+                        text, role_name=target_role,
                         timeout=600.0, truncate_long=True, prefer_wav=False,
                     )
                 raw = base64.b64decode(b64_rec.removeprefix("base64://"), validate=True)
@@ -516,6 +806,8 @@ def _register_routes(app: FastAPI, services) -> None:
                     "code": 0,
                     "status": "success",
                     "duration_sec": dur,
+                    "role": target_role,
+                    "text": text,
                     "is_silk": True,
                     "payload_len": len(b64_rec or ""),
                     "meta": dict(getattr(tts_service, "LAST_AUDIO_META", {})),
@@ -537,10 +829,8 @@ def _register_routes(app: FastAPI, services) -> None:
                 return {"code": 1, "error": "测试参考图不存在"}
             with open(ref_path, "rb") as f:
                 raw_b64 = "data:image/png;base64," + base64.b64encode(f.read()).decode("ascii")
-            api_key = os.getenv("DASHSCOPE_API_KEY") or ""
-            if model:
-                os.environ["DASHSCOPE_VL_MODEL"] = model
-            target_model = model or os.getenv("DASHSCOPE_VL_MODEL") or "qwen3-vl-plus"
+            api_key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
+            target_model = model or os.getenv("DEEPSEEK_MODEL") or "deepseek-flash"
             reply = await llm_service.chat_with_vision(
                 api_key=api_key,
                 image_b64_list=[raw_b64],
@@ -566,8 +856,43 @@ def _register_routes(app: FastAPI, services) -> None:
 
     if "/api/switch/global" not in existing_paths:
         @app.post("/api/switch/global")
-        async def toggle_global(req: GlobalSwitchReq) -> dict[str, Any]:
-            state.global_active = req.active
+        async def toggle_global_post(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            raw_act = payload.get("active")
+            if raw_act is not None:
+                state.global_active = _parse_bool(raw_act, state.global_active)
+            if not state.global_active:
+                from .group_chat_manager import group_chat_manager
+                autonomous_coordinator.clear_pending_events()
+                for t in list(group_chat_manager._window_timers.values()):
+                    if t and not t.done():
+                        t.cancel()
+                group_chat_manager._window_timers.clear()
+                group_chat_manager._pending_buffers.clear()
+                for futs in list(group_chat_manager._batch_futures.values()):
+                    for f in futs:
+                        if not f.done():
+                            f.set_result(None)
+                group_chat_manager._batch_futures.clear()
+            await state.save()
+            return {"code": 0, "global_active": state.global_active}
+
+        @app.get("/api/switch/global")
+        async def toggle_global_get(active: Any = True) -> dict[str, Any]:
+            state.global_active = _parse_bool(active, True)
+            if not state.global_active:
+                from .group_chat_manager import group_chat_manager
+                autonomous_coordinator.clear_pending_events()
+                for t in list(group_chat_manager._window_timers.values()):
+                    if t and not t.done():
+                        t.cancel()
+                group_chat_manager._window_timers.clear()
+                group_chat_manager._pending_buffers.clear()
+                for futs in list(group_chat_manager._batch_futures.values()):
+                    for f in futs:
+                        if not f.done():
+                            f.set_result(None)
+                group_chat_manager._batch_futures.clear()
             await state.save()
             return {"code": 0, "global_active": state.global_active}
 
@@ -747,18 +1072,27 @@ def _register_routes(app: FastAPI, services) -> None:
                 pass
 
             async def _delayed_respawn() -> None:
-                await asyncio.sleep(0.4)
-                launcher = BOT_ROOT / "daemon_launcher.py"
-                subprocess.Popen(
-                    [sys.executable, str(launcher)],
-                    cwd=str(BOT_ROOT),
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-                await asyncio.sleep(0.3)
-                os._exit(0)
+                try:
+                    await asyncio.sleep(0.2)
+                    try:
+                        user_memory_store.close()
+                    except Exception:
+                        pass
+                    launcher = BOT_ROOT / "daemon_launcher.py"
+                    subprocess.Popen(
+                        [sys.executable, str(launcher)],
+                        cwd=str(BOT_ROOT),
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                        close_fds=True,
+                    )
+                except Exception as exc:
+                    logger.error(f"[Restart] 拉起守护进程异常: {exc}")
+                finally:
+                    await asyncio.sleep(0.3)
+                    os._exit(0)
 
             asyncio.create_task(_delayed_respawn())
             return {"code": 0, "message": "后端正在自重启并加载最新代码，已同步重置残留状态..."}
@@ -950,15 +1284,14 @@ def _register_routes(app: FastAPI, services) -> None:
             return ref_fetcher.get_fetcher_status()
 
     if "/api/switch/small_talk" not in existing_paths:
-        class SmallTalkSwitchReq(BaseModel):
-            enable: bool
-            style: Optional[str] = None
-
         @app.post("/api/switch/small_talk")
-        async def switch_small_talk_post(req: SmallTalkSwitchReq) -> dict[str, Any]:
-            state.small_talk_mode = req.enable
-            if req.style:
-                state.small_talk_style = req.style
+        async def switch_small_talk_post(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            raw_en = payload.get("enable")
+            if raw_en is not None:
+                state.small_talk_mode = _parse_bool(raw_en, state.small_talk_mode)
+            if payload.get("style"):
+                state.small_talk_style = str(payload["style"]).strip()
             await state.save()
             return {
                 "code": 0,
@@ -968,8 +1301,8 @@ def _register_routes(app: FastAPI, services) -> None:
             }
 
         @app.get("/api/switch/small_talk")
-        async def switch_small_talk_get(enable: bool = True, style: Optional[str] = None) -> dict[str, Any]:
-            state.small_talk_mode = bool(enable)
+        async def switch_small_talk_get(enable: Any = True, style: Optional[str] = None) -> dict[str, Any]:
+            state.small_talk_mode = _parse_bool(enable, True)
             if style:
                 state.small_talk_style = style
             await state.save()
@@ -985,8 +1318,10 @@ def _register_routes(app: FastAPI, services) -> None:
             style: str
 
         @app.post("/api/switch/small_talk_style")
-        async def switch_small_talk_style_post(req: SmallTalkStyleReq) -> dict[str, Any]:
-            state.small_talk_style = req.style
+        async def switch_small_talk_style_post(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            style = str(payload.get("style") or "pure_persona").strip()
+            state.small_talk_style = style
             await state.save()
             return {
                 "code": 0,
@@ -1007,48 +1342,61 @@ def _register_routes(app: FastAPI, services) -> None:
             }
 
     if "/api/training/toggle" not in existing_paths:
-        class TrainingSwitchReq(BaseModel):
-            enable: bool
-            group_id: Optional[str] = None
-
         @app.post("/api/training/toggle")
-        async def toggle_training_post(req: TrainingSwitchReq) -> dict[str, Any]:
-            state.training_mode = req.enable
-            if req.group_id:
-                gid = str(req.group_id).strip()
+        async def toggle_training_post(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            raw_en = payload.get("enable")
+            if raw_en is not None:
+                state.training_mode = _parse_bool(raw_en, state.training_mode)
+            gid = str(payload.get("group_id") or "").strip()
+            if gid:
                 t_groups = list(dict.fromkeys([str(g) for g in (state.training_groups or [])]))
-                if req.enable and gid not in t_groups:
+                if state.training_mode and gid not in t_groups:
                     t_groups.append(gid)
-                elif not req.enable and gid in t_groups:
+                elif not state.training_mode and gid in t_groups:
                     t_groups.remove(gid)
                 state.training_groups = t_groups
             await state.save()
             return {"code": 0, "status": "ok", "training_mode": state.training_mode, "training_groups": state.training_groups}
 
         @app.get("/api/training/toggle")
-        async def toggle_training_get(enable: bool = True, group_id: Optional[str] = None) -> dict[str, Any]:
-            state.training_mode = bool(enable)
+        async def toggle_training_get(enable: Any = True, group_id: Optional[str] = None) -> dict[str, Any]:
+            state.training_mode = _parse_bool(enable, True)
             if group_id:
                 gid = str(group_id).strip()
                 t_groups = list(dict.fromkeys([str(g) for g in (state.training_groups or [])]))
-                if enable and gid not in t_groups:
+                if state.training_mode and gid not in t_groups:
                     t_groups.append(gid)
-                elif not enable and gid in t_groups:
+                elif not state.training_mode and gid in t_groups:
                     t_groups.remove(gid)
                 state.training_groups = t_groups
             await state.save()
             return {"code": 0, "status": "ok", "training_mode": state.training_mode, "training_groups": state.training_groups}
 
     if "/api/switch/auto_reply" not in existing_paths:
-        class AutoReplySwitchReq(BaseModel):
-            enable: bool
-            interval: Optional[float] = None
-
         @app.post("/api/switch/auto_reply")
-        async def switch_auto_reply_post(req: AutoReplySwitchReq) -> dict[str, Any]:
-            state.auto_reply_mode = bool(req.enable)
-            if req.interval is not None:
-                state.reply_interval_seconds = float(req.interval)
+        async def switch_auto_reply_post(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            raw_en = payload.get("enable")
+            if raw_en is not None:
+                state.auto_reply_mode = _parse_bool(raw_en, state.auto_reply_mode)
+                if not state.auto_reply_mode:
+                    from .group_chat_manager import group_chat_manager
+                    for gid, buf in list(group_chat_manager._pending_buffers.items()):
+                        if not any(m.is_priority for m in buf):
+                            t = group_chat_manager._window_timers.pop(gid, None)
+                            if t and not t.done():
+                                t.cancel()
+                            buf.clear()
+                            for f in group_chat_manager._batch_futures.pop(gid, []):
+                                if not f.done():
+                                    f.set_result(None)
+            if payload.get("interval") is not None or payload.get("reply_interval_seconds") is not None:
+                try:
+                    val = float(payload.get("interval") or payload.get("reply_interval_seconds"))
+                    state.reply_interval_seconds = val
+                except (ValueError, TypeError):
+                    pass
             await state.save()
             return {
                 "code": 0,
@@ -1058,8 +1406,8 @@ def _register_routes(app: FastAPI, services) -> None:
             }
 
         @app.get("/api/switch/auto_reply")
-        async def switch_auto_reply_get(enable: bool = True, interval: Optional[float] = None) -> dict[str, Any]:
-            state.auto_reply_mode = bool(enable)
+        async def switch_auto_reply_get(enable: Any = True, interval: Optional[float] = None) -> dict[str, Any]:
+            state.auto_reply_mode = _parse_bool(enable, True)
             if interval is not None:
                 state.reply_interval_seconds = float(interval)
             await state.save()
@@ -1071,44 +1419,327 @@ def _register_routes(app: FastAPI, services) -> None:
             }
 
     if "/api/training/trigger" not in existing_paths:
-        class TriggerTrainingReq(BaseModel):
-            group_id: str
-            count: int = 120
-
         @app.post("/api/training/trigger")
-        async def trigger_group_training_post(req: TriggerTrainingReq) -> dict[str, Any]:
+        async def trigger_group_training_post(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            raw_gid = payload.get("group_id") or payload.get("gid") or ""
+            gid = str(raw_gid).strip()
+            if not gid:
+                return {"code": 400, "status": "error", "message": "缺少群号"}
+            count = int(payload.get("count") or 120)
+            async_mode = _parse_bool(payload.get("async_mode"), True) if "async_mode" in payload else False
+            if gid and gid not in state.training_groups:
+                state.training_groups.append(gid)
+                await state.save()
             from nonebot import get_bot
-            gid = str(req.group_id).strip()
             bot = None
             try:
                 bot = get_bot()
             except Exception:
                 pass
-            if bot is not None:
-                res = await modes.fetch_and_train_group_history(bot, gid, count=req.count)
-            else:
-                res = await modes.trigger_group_training_now(gid)
-            return {"code": 0, "status": "ok", "result": res}
+
+            async def _coro():
+                if bot is not None:
+                    return await modes.fetch_and_train_group_history(bot, gid, count=count)
+                return await modes.trigger_group_training_now(gid)
+
+            if async_mode:
+                job = modes.training_job_manager.submit_job(gid, _coro, kind="manual_group_training")
+                return {
+                    "code": 0,
+                    "status": job.status,
+                    "task_id": job.task_id,
+                    "job": job.to_dict(),
+                }
+
+            # 即使同步等待也经过受控队列，并如实反映真实成功/失败状态（绝不把失败标记为训练完成）
+            job = modes.training_job_manager.submit_job(gid, _coro, kind="manual_group_training")
+            task_obj = modes.training_job_manager._active_tasks.get(job.task_id)
+            if task_obj is not None:
+                await task_obj
+            updated = modes.training_job_manager.get_job(job.task_id) or job.to_dict()
+            res = updated.get("result") or {}
+            if updated.get("status") == "error" or res.get("status") in {"error", "empty"}:
+                err_msg = updated.get("error_message") or res.get("message") or "训练失败"
+                return {
+                    "code": 1,
+                    "status": "error",
+                    "task_id": job.task_id,
+                    "message": err_msg,
+                    "result": res,
+                }
+            return {
+                "code": 0,
+                "status": "ok",
+                "task_id": job.task_id,
+                "result": res,
+            }
 
         @app.get("/api/training/trigger")
-        async def trigger_group_training_get(group_id: str, count: int = 120) -> dict[str, Any]:
-            from nonebot import get_bot
+        async def trigger_group_training_get(group_id: str = "", count: int = 120) -> dict[str, Any]:
             gid = str(group_id).strip()
-            bot = None
-            try:
-                bot = get_bot()
-            except Exception:
-                pass
-            if bot is not None:
-                res = await modes.fetch_and_train_group_history(bot, gid, count=count)
-            else:
-                res = await modes.trigger_group_training_now(gid)
-            return {"code": 0, "status": "ok", "result": res}
+            if not gid:
+                return {"code": 400, "status": "error", "message": "缺少群号"}
+            # GET 仅查询该群最近一次训练任务状态，防止因网络抖动通过 GET 重复触发写操作
+            recent = modes.training_job_manager.list_jobs(group_id=gid, limit=1)
+            if recent:
+                latest = recent[0]
+                return {
+                    "code": 0 if latest.get("status") != "error" else 1,
+                    "status": latest.get("status", "idle"),
+                    "task_id": latest.get("task_id", ""),
+                    "message": latest.get("error_message", ""),
+                    "result": latest.get("result", {}),
+                }
+            return {"code": 0, "status": "idle", "group_id": gid, "message": "请使用 POST /api/training/trigger 提交训练任务"}
+
+    if "/api/training/jobs" not in existing_paths:
+        @app.get("/api/training/jobs")
+        async def api_training_jobs(group_id: Optional[str] = None) -> dict[str, Any]:
+            return {"code": 0, "status": "ok", "jobs": modes.training_job_manager.list_jobs(group_id=group_id)}
+
+        @app.get("/api/training/job/{task_id}")
+        async def api_training_job_detail(task_id: str) -> dict[str, Any]:
+            job = modes.training_job_manager.get_job(task_id)
+            if job is None:
+                return {"code": 404, "status": "not_found", "message": f"未找到任务: {task_id}"}
+            return {
+                "code": 0 if job.get("status") != "error" else 1,
+                "status": job.get("status"),
+                "task_id": task_id,
+                "error_message": job.get("error_message", ""),
+                "job": job,
+                "result": job.get("result", {}),
+            }
 
     if "/api/training/status" not in existing_paths:
         @app.get("/api/training/status")
         async def api_training_status() -> dict[str, Any]:
-            return {"code": 0, "status": "ok", "data": modes.get_training_status()}
+            data = await modes.get_training_status_async()
+            return {"code": 0, "status": "ok", "data": data}
+
+    if "/api/profiles" not in existing_paths:
+        @app.get("/api/profiles")
+        async def api_list_user_profiles(limit: int = 50) -> dict[str, Any]:
+            return {"code": 0, "status": "ok", "profiles": user_memory_store.list_profiles_summary(limit=limit)}
+
+        @app.get("/api/profiles/{uid}")
+        async def api_get_user_profile(uid: str, group_id: Optional[str] = None, character: Optional[str] = None) -> dict[str, Any]:
+            if not str(uid).strip().isdigit():
+                return {"code": 400, "status": "error", "message": "无效 QQ 号"}
+            rec = user_memory_store.get_scoped_profile(
+                str(uid).strip(),
+                group_id=group_id,
+                character=character or state.active_character,
+            )
+            return {"code": 0, "status": "ok", "profile": rec.to_dict()}
+
+        @app.post("/api/profiles/correct")
+        async def api_correct_user_profile(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            uid = str(payload.get("uid") or "").strip()
+            if not uid.isdigit():
+                return {"code": 400, "status": "error", "message": "无效 QQ 号"}
+            group_id = payload.get("group_id")
+            char_id = str(payload.get("character") or state.active_character or "amiya").strip()
+            rec = user_memory_store.correct_user_fact(
+                uid,
+                group_id=str(group_id).strip() if group_id else None,
+                character=char_id,
+                preferred_title=payload.get("preferred_title"),
+                add_fact=str(payload.get("add_fact") or ""),
+                invalidate_keyword=str(payload.get("invalidate_keyword") or ""),
+            )
+            return {"code": 0, "status": "ok", "profile": rec.to_dict()}
+
+        @app.post("/api/profiles/delete")
+        async def api_delete_user_profile(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            uid = str(payload.get("uid") or payload.get("qq") or "").strip()
+            if not uid.isdigit():
+                return {"code": 400, "status": "error", "message": "无效 QQ 号"}
+            group_id = payload.get("group_id")
+            raw_char = payload.get("character")
+            all_scopes = _parse_bool(payload.get("all_scopes"), False)
+            if all_scopes or (group_id is None and raw_char is None):
+                res = user_memory_store.clear_user_profile_by_uid(uid)
+                return {"code": 0, "status": "ok", "deleted": True, "clear_result": res}
+            deleted = user_memory_store.delete_scoped_profile(
+                uid,
+                group_id=str(group_id).strip() if group_id else None,
+                character=str(raw_char).strip() if raw_char else None,
+            )
+            return {"code": 0, "status": "ok", "deleted": deleted}
+
+        @app.post("/api/profiles/clear_qq")
+        async def api_clear_user_profile_by_qq(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            uid = str(payload.get("uid") or payload.get("qq") or "").strip()
+            if not uid.isdigit():
+                return {"code": 400, "status": "error", "message": "请提供有效的数字 QQ 号"}
+            res = user_memory_store.clear_user_profile_by_uid(uid)
+            return {"code": 0, "status": "ok", "data": res}
+
+        @app.get("/api/group_logs/{group_id}")
+        async def api_get_group_chat_logs(
+            group_id: str,
+            uid: Optional[str] = None,
+            limit: int = 30,
+        ) -> dict[str, Any]:
+            gid = str(group_id or "").strip()
+            if not gid:
+                return {"code": 400, "status": "error", "message": "缺少群号"}
+            logs = user_memory_store.get_group_chat_history(gid, uid=uid, limit=limit)
+            return {"code": 0, "status": "ok", "group_id": gid, "uid": uid or "", "logs": logs}
+
+    if "/api/autonomous/status" not in existing_paths:
+        @app.get("/api/autonomous/status")
+        async def api_autonomous_status() -> dict[str, Any]:
+            return {"code": 0, "status": "ok", "data": autonomous_coordinator.get_status()}
+
+        @app.get("/api/promises")
+        async def api_list_promises(uid: Optional[str] = None, status: Optional[str] = None) -> dict[str, Any]:
+            return {
+                "code": 0,
+                "status": "ok",
+                "promises": autonomous_coordinator.list_promises(uid=uid, status=status),
+            }
+
+        @app.post("/api/promises/cancel")
+        async def api_cancel_promise(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            pid = str(payload.get("promise_id") or payload.get("id") or "").strip()
+            if not pid:
+                return {"code": 400, "status": "error", "message": "缺少 promise_id"}
+            ok = autonomous_coordinator.cancel_promise(pid)
+            if not ok:
+                return {"code": 404, "status": "error", "message": "未找到可取消的挂起约定"}
+            return {"code": 0, "status": "ok", "promise_id": pid}
+
+        @app.get("/api/evolution/status")
+        async def api_evolution_status(group_id: Optional[str] = None) -> dict[str, Any]:
+            from .expression_learner import expression_store
+
+            return {
+                "code": 0,
+                "status": "ok",
+                "data": {
+                    "learned_rules": autonomous_coordinator.list_learned_rules(group_id=group_id),
+                    "expression_feedback": expression_store.get_feedback_summary(group_id=group_id),
+                    "owner_work_checklists": list(autonomous_coordinator._owner_work_checklists)[-10:],
+                },
+            }
+
+        @app.post("/api/evolution/reflect")
+        async def api_evolution_reflect(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            gid = str(payload.get("group_id") or "").strip() or None
+            res = autonomous_coordinator.distill_learned_rules(group_id=gid)
+            return {"code": 0, "status": "ok", "data": res}
+
+        @app.post("/api/ autonomous/config" if False else "/api/autonomous/config")
+        async def api_autonomous_config(request: Request) -> dict[str, Any]:
+            payload = await _parse_any_request_payload(request)
+            try:
+                if "autonomous_group_chat_enabled" in payload:
+                    state.autonomous_group_chat_enabled = _parse_bool(payload["autonomous_group_chat_enabled"], False)
+                if "autonomous_qzone_enabled" in payload:
+                    state.autonomous_qzone_enabled = _parse_bool(payload["autonomous_qzone_enabled"], False)
+                if "autonomous_qzone_max_per_day" in payload:
+                    state.autonomous_qzone_max_per_day = int(payload["autonomous_qzone_max_per_day"])
+                if "autonomous_qzone_min_interval_hours" in payload:
+                    state.autonomous_qzone_min_interval_hours = float(payload["autonomous_qzone_min_interval_hours"])
+                if "autonomous_quiet_start_hour" in payload:
+                    state.autonomous_quiet_start_hour = int(payload["autonomous_quiet_start_hour"])
+                if "autonomous_quiet_end_hour" in payload:
+                    state.autonomous_quiet_end_hour = int(payload["autonomous_quiet_end_hour"])
+            except (TypeError, ValueError) as exc:
+                return {"code": 1, "status": "error", "message": f"自主参数无效: {exc}"}
+            await state.save()
+            return {"code": 0, "status": "ok", "data": autonomous_coordinator.get_status()}
+
+    if "/api/group_chat/config" not in existing_paths:
+        @app.get("/api/group_chat/config")
+        async def api_get_group_chat_config() -> dict[str, Any]:
+            return {
+                "code": 0,
+                "status": "ok",
+                "scope": "global_default",
+                "group_buffer_enabled": state.group_buffer_enabled,
+                "group_merge_window_sec": state.group_merge_window_sec,
+                "group_merge_max_messages": state.group_merge_max_messages,
+                "group_merge_max_chars": state.group_merge_max_chars,
+                "group_quota_min_interval_sec": state.group_quota_min_interval_sec,
+                "group_quota_max_per_minute": state.group_quota_max_per_minute,
+                "group_chunk_pace_sec": state.group_chunk_pace_sec,
+            }
+
+        @app.post("/api/group_chat/config")
+        async def api_group_chat_config(request: Request) -> dict[str, Any]:
+            from .group_chat_manager import group_chat_manager
+            payload = await _parse_any_request_payload(request)
+            try:
+                if "group_buffer_enabled" in payload:
+                    state.group_buffer_enabled = _parse_bool(payload["group_buffer_enabled"], state.group_buffer_enabled)
+                if "group_merge_window_sec" in payload:
+                    val_w = float(payload["group_merge_window_sec"])
+                    if val_w < 0 or val_w > 10:
+                        return {"code": 1, "status": "error", "message": "合并窗口秒数需在 0 ~ 10 秒之间"}
+                    state.group_merge_window_sec = val_w
+                if "group_merge_max_messages" in payload:
+                    val_m = int(payload["group_merge_max_messages"])
+                    if val_m < 1 or val_m > 20:
+                        return {"code": 1, "status": "error", "message": "单批最大消息数需在 1 ~ 20 条之间"}
+                    state.group_merge_max_messages = val_m
+                if "group_merge_max_chars" in payload:
+                    val_c = int(payload["group_merge_max_chars"])
+                    if val_c < 200 or val_c > 8000:
+                        return {"code": 1, "status": "error", "message": "单批最大字符数需在 200 ~ 8000 字之间"}
+                    state.group_merge_max_chars = val_c
+                if "group_quota_min_interval_sec" in payload:
+                    val_i = float(payload["group_quota_min_interval_sec"])
+                    if val_i < 0.5 or val_i > 120:
+                        return {"code": 1, "status": "error", "message": "普通参与最小发送间隔需在 0.5 ~ 120 秒之间"}
+                    state.group_quota_min_interval_sec = val_i
+                if "group_quota_max_per_minute" in payload:
+                    val_q = int(payload["group_quota_max_per_minute"])
+                    if val_q < 1 or val_q > 120:
+                        return {"code": 1, "status": "error", "message": "每分钟普通回复上限需在 1 ~ 120 条之间"}
+                    state.group_quota_max_per_minute = val_q
+                if "group_chunk_pace_sec" in payload:
+                    val_p = float(payload["group_chunk_pace_sec"])
+                    if val_p < 0 or val_p > 10:
+                        return {"code": 1, "status": "error", "message": "长回答分段间隔需在 0 ~ 10 秒之间"}
+                    state.group_chunk_pace_sec = val_p
+            except (TypeError, ValueError) as exc:
+                return {"code": 1, "status": "error", "message": f"参数格式错误: {exc}"}
+            await state.save()
+            group_chat_manager.configure(
+                merge_window_sec=state.group_merge_window_sec,
+                max_batch_messages=state.group_merge_max_messages,
+                max_batch_chars=state.group_merge_max_chars,
+                min_interval_sec=state.group_quota_min_interval_sec,
+                max_per_minute=state.group_quota_max_per_minute,
+                chunk_pace_sec=state.group_chunk_pace_sec,
+            )
+            if not state.group_buffer_enabled:
+                for gid in list(group_chat_manager._window_timers.keys()):
+                    t = group_chat_manager._window_timers.pop(gid, None)
+                    if t and not t.done():
+                        t.cancel()
+                    group_chat_manager._flush_locked(gid)
+            return {
+                "code": 0,
+                "status": "ok",
+                "scope": "global_default",
+                "group_buffer_enabled": state.group_buffer_enabled,
+                "group_merge_window_sec": state.group_merge_window_sec,
+                "group_merge_max_messages": state.group_merge_max_messages,
+                "group_merge_max_chars": state.group_merge_max_chars,
+                "group_quota_min_interval_sec": state.group_quota_min_interval_sec,
+                "group_quota_max_per_minute": state.group_quota_max_per_minute,
+                "group_chunk_pace_sec": state.group_chunk_pace_sec,
+            }
 
     if "/api/test/send_private_chat" not in existing_paths:
         @app.get("/api/test/send_private_chat")
@@ -1201,3 +1832,98 @@ def setup(services) -> None:
     app = get_app()
     _ensure_cors(app)
     _register_routes(app, services)
+    from . import local_rag_service
+    local_rag_service.register_routes(app)
+    if not getattr(app.state, "_daily_lifecycle_registered", False):
+        async def start_daily_services() -> None:
+            await local_rag_service.startup()
+
+        get_driver().on_startup(start_daily_services)
+        get_driver().on_shutdown(local_rag_service.shutdown)
+        app.state._daily_lifecycle_registered = True
+
+    if getattr(app.state, "_actuator_routes_mounted", False):
+        return
+    app.state._actuator_routes_mounted = True
+
+    def actuator_local(request: Request) -> None:
+        from urllib.parse import urlsplit
+        if request.client is None or request.client.host not in {'127.0.0.1', '::1'}:
+            raise HTTPException(403, '设备动作接口仅允许本机控制台访问')
+        origin = request.headers.get('origin')
+        if origin and urlsplit(origin).hostname not in {'127.0.0.1', 'localhost', '::1'}:
+            raise HTTPException(403, '设备动作接口拒绝外部网页来源')
+
+    @app.get('/api/actuator/status')
+    async def api_actuator_status(request: Request) -> dict[str, Any]:
+        actuator_local(request)
+        from .device_actuator import mac_actions, mumu_verifier
+        return {'code': 0, 'status': 'ok', 'mac_actuator': mac_actions.status(),
+                'mumu_verifier': {'adb_path': mumu_verifier.resolve_adb_binary(), 'last_verification': mumu_verifier._last_verification}}
+
+    @app.post('/api/actuator/config')
+    async def api_actuator_config(request: Request) -> dict[str, Any]:
+        actuator_local(request)
+        from .device_actuator import mac_actions
+        try:
+            result = mac_actions.configure(await request.json())
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {'code': 0, 'status': 'ok', 'mac_actuator': result}
+
+    @app.post('/api/actuator/mac/plan')
+    async def api_actuator_mac_plan(request: Request) -> dict[str, Any]:
+        actuator_local(request)
+        from .device_actuator import mac_actions
+        body = await request.json()
+        uid = str(state.superuser_qq)
+        try:
+            job = await mac_actions.plan_message(uid, str(body.get('text') or ''), prepare_only=True)
+        except (ValueError, PermissionError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {'code': 0, 'status': 'ok', 'job': job}
+
+    @app.post('/api/actuator/mac/confirm')
+    async def api_actuator_mac_confirm(request: Request) -> dict[str, Any]:
+        actuator_local(request)
+        from .device_actuator import mac_actions
+        body = await request.json()
+        try:
+            job = await mac_actions.confirm(str(state.superuser_qq), str(body.get('job_id') or ''), cancel=body.get('cancel') is True)
+        except (ValueError, PermissionError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {'code': 0, 'status': 'ok', 'job': job}
+
+    @app.post('/api/actuator/mac/test')
+    async def api_actuator_mac_test(request: Request) -> dict[str, Any]:
+        actuator_local(request)
+        from .device_actuator import mac_actions
+        body = await request.json()
+        try:
+            if body.get('action', 'notify') not in {'notify', 'music', 'reminder'}:
+                raise ValueError('快捷指令和日历请先准备动作，再确认执行')
+            job = mac_actions.prepare(str(state.superuser_qq), {
+                **body, 'action': body.get('action') or 'notify',
+                'title': body.get('title') or '阿米娅的本机联动测试',
+                'message': body.get('message') or '本机通知命令已执行，请核对通知中心。',
+            })
+            job = await mac_actions.confirm(str(state.superuser_qq), job['id'])
+        except (ValueError, PermissionError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {'code': 0 if job['status'] == 'succeeded' else 400,
+                'status': 'ok' if job['status'] == 'succeeded' else 'error', 'result': job.get('result'), 'job': job}
+
+    @app.post('/api/actuator/mumu/verify')
+    async def api_actuator_mumu_verify(request: Request) -> dict[str, Any]:
+        actuator_local(request)
+        from .device_actuator import mumu_verifier
+        body = await request.json()
+        try:
+            if body.get('dry_run', True) is not True or body.get('force_synthetic', False):
+                raise ValueError('本接口只验证真实 MuMu 截图与 AI 规划，不执行操作')
+            result = await mumu_verifier.verify_gui_step(
+                task_goal=str(body.get('task_goal') or '定位屏幕左上角的返回按钮'),
+                endpoint=str(body.get('endpoint') or '127.0.0.1:16384'), dry_run=True)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {'code': 0, 'status': 'ok', 'verification': result}

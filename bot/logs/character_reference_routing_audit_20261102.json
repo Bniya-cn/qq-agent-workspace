@@ -1,0 +1,28 @@
+{
+  "counts": {
+    "Arknights": 450,
+    "BlueArchive": 281,
+    "Endfield": 34,
+    "GenshinImpact": 123,
+    "HonkaiStarRail": 79,
+    "WutheringWaves": 42
+  },
+  "total": 1009,
+  "direct_name_matches": 1007,
+  "clarified_matches": [
+    {
+      "name": "星野（武装）",
+      "id": "10098",
+      "path": "BlueArchive/10098_星野（武装）.webp"
+    },
+    {
+      "name": "星野（武装）",
+      "id": "10099",
+      "path": "BlueArchive/10099_星野（武装）.webp"
+    }
+  ],
+  "failure_count": 0,
+  "failures": [],
+  "scope": "全库名称/专属标识到原图路径的检查，不代表逐角色真实出图准确率。",
+  "seconds": 4.42
+}

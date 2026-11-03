@@ -52,31 +52,6 @@ async def select_delivery(text: str, style: str, role: str, candidates: list[dic
                 payload["thinking"] = {"type": "disabled"}
             providers.append((ds_base + "/chat/completions", ds_key, payload, False))
 
-    if cfg.get("DASHSCOPE_API_KEY") and cfg.get("DASHSCOPE_APP_ID_VOICE_DIRECTOR"):
-        providers.append((
-            f"https://dashscope.aliyuncs.com/api/v1/apps/{cfg['DASHSCOPE_APP_ID_VOICE_DIRECTOR']}/completion",
-            cfg["DASHSCOPE_API_KEY"],
-            {"input": {"prompt": _director.DIRECTOR_SYSTEM_PROMPT + query}, "parameters": {"has_thoughts": False}},
-            True,
-        ))
-
-    if cfg.get("DASHSCOPE_API_KEY"):
-        q_model = (cfg.get("DASHSCOPE_MODEL") or "qwen-plus").strip()
-        providers.append((
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            cfg["DASHSCOPE_API_KEY"],
-            {
-                "model": q_model,
-                "messages": [
-                    {"role": "system", "content": _director.DIRECTOR_SYSTEM_PROMPT},
-                    {"role": "user", "content": query},
-                ],
-                "max_tokens": 350,
-                "temperature": 0.3,
-            },
-            False,
-        ))
-
     valid_names = {r["name"] for r in candidates if isinstance(r, dict) and r.get("name")}
     try:
         async with asyncio.timeout(6.5):
@@ -95,4 +70,4 @@ async def select_delivery(text: str, style: str, role: str, candidates: list[dic
     except TimeoutError:
         pass
 
-    raise TTSGenerationError("AI 声音导演未返回有效情绪选择，改用文字。")
+    raise TTSGenerationError("AI 声音导演未返回有效情绪选择，本轮未发送语音。")

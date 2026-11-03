@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  gewe:
+    image: registry.cn-hangzhou.aliyuncs.com/gewe/gewe:latest
+    container_name: amiya-gewe
+    restart: unless-stopped
+    ports:
+      - "2531:2531"
+      - "2532:2532"
+    volumes:
+      - ./gewe_data:/root/temp
+    networks:
+      - amiya-wechat-net
+
+  astrbot:
+    image: soulter/astrbot:latest
+    container_name: amiya-astrbot
+    restart: unless-stopped
+    ports:
+      - "6185:6185"
+    volumes:
+      - ./astrbot_data:/AstrBot/data
+    environment:
+      - TZ=Asia/Shanghai
+    depends_on:
+      - gewe
+    networks:
+      - amiya-wechat-net
+
+networks:
+  amiya-wechat-net:
+    driver: bridge

@@ -1,41 +1,54 @@
-"""仅在进程启动时构建服务单例；配置由原 state 原位更新，源码更新必须重启。"""
+"""静态服务注册表：启动时一次性绑定并校验核心服务单例。"""
+from __future__ import annotations
+
 from dataclasses import dataclass
-from types import ModuleType
+from typing import Any
 
-from . import conversation_service, doc_service, document_writer, llm_service, tts_service
-from .bailian_file_renderer import render_files
-from .config_manager import state
-from .history_recorder import recorder
-from .message_pipeline import is_pure_vision_qa_query
-
-_raw_detect_draw = llm_service._auto_detect_draw_intent
-
-
-def _guarded_detect_draw_intent(text: str, has_image: bool = False) -> bool:
-    clean = llm_service._strip_reply_context_wrapper(text or "").strip()
-    if is_pure_vision_qa_query(clean):
-        return False
-    return _raw_detect_draw(clean, has_image=has_image)
-
-
-llm_service._auto_detect_draw_intent = _guarded_detect_draw_intent
+from . import (  # noqa: E402
+    bailian_file_renderer,
+    conversation_service,
+    doc_service,
+    document_writer,
+    llm_service,
+    tts_service,
+)
+from .config_manager import state  # noqa: E402
+from .history_recorder import recorder  # noqa: E402
 
 
 @dataclass(frozen=True)
 class ServiceRegistry:
-    conversation: ModuleType
-    documents: ModuleType
-    writer: ModuleType
-    llm: ModuleType
-    tts: ModuleType
+    state: Any
+    recorder: Any
+    conversation: Any
+    documents: Any
+    writer: Any
+    llm: Any
+    tts: Any
 
-    def validate(self) -> None:
-        for module, entry in ((self.conversation, "use_session"), (self.documents, "prepare_documents"),
-                              (self.writer, "generate"), (self.llm, "chat_operator"), (self.tts, "synthesize")):
-            if not callable(getattr(module, entry, None)):
-                raise RuntimeError(f"服务初始化失败: {module.__name__}.{entry}")
+    def validate(self) -> "ServiceRegistry":
+        required_callables = (
+            ("conversation.store.begin", getattr(getattr(self.conversation, "store", None), "begin", None)),
+            ("documents.prepare_documents", getattr(self.documents, "prepare_documents", None)),
+            ("writer.generate", getattr(self.writer, "generate", None)),
+            ("llm.chat_operator", getattr(self.llm, "chat_operator", None)),
+            ("tts.synthesize", getattr(self.tts, "synthesize", None)),
+        )
+        for name, fn in required_callables:
+            if not callable(fn):
+                raise RuntimeError(f"ServiceRegistry 校验失败: {name} 不可调用")
+        return self
 
 
-services = ServiceRegistry(conversation_service, doc_service, document_writer, llm_service, tts_service)
-services.validate()
-doc_service.configure_file_renderer(render_files)
+# 默认直接使用本地渲染器导出 docx/pdf/md，不再调用百炼文件制作 App
+services = ServiceRegistry(
+    state=state,
+    recorder=recorder,
+    conversation=conversation_service,
+    documents=doc_service,
+    writer=document_writer,
+    llm=llm_service,
+    tts=tts_service,
+).validate()
+
+SERVICES = services

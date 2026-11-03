@@ -56,3 +56,17 @@
 *.xcuserstate
 **/xcuserdata/
 .DS_Store
+
+# 3D渲染与模型大素材
+/renders/
+/.ai-blender/
+
+# 工具依赖与虚拟环境
+/tools/three-verify/node_modules/
+/tools/*-venv/
+/tools/**/node_modules/
+*.blend
+*.blend1
+*.glb
+*.dylib
+*.so

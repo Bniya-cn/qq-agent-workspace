@@ -66,7 +66,12 @@ class TaskProgressTracker:
             for old_id in list(self.order):
                 if len(self.order) <= self.max_items:
                     break
-                if self.tasks[old_id]["status"] in {"done", "error"}:
+                old_item = self.tasks.get(old_id)
+                if old_item is None:
+                    # 序列可能残留已被其他清理路径移除的任务 ID；跳过它，避免新消息记录失败。
+                    self.order.remove(old_id)
+                    continue
+                if old_item["status"] in {"done", "error"}:
                     self.order.remove(old_id)
                     self.tasks.pop(old_id, None)
         else:

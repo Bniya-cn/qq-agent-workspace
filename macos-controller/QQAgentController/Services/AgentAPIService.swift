@@ -24,6 +24,7 @@ final class AgentAPIService: ObservableObject {
     // MARK: - Voice Mode State
     @Published var voiceEnabled = false
     @Published var voiceOnlyReply = false
+    @Published var voiceEmotionDirectorEnabled = false
     @Published var voiceMode = "emotion_auto"
     @Published var voiceRefName = "default"
     @Published var voiceModel = "auto"
@@ -84,6 +85,7 @@ final class AgentAPIService: ObservableObject {
             comfortTargets = status.comfortTargets
             voiceEnabled = status.ttsEnabled ?? status.voiceEnabled ?? false
             voiceOnlyReply = status.voiceOnlyReply ?? false
+            voiceEmotionDirectorEnabled = status.voiceEmotionDirectorEnabled ?? false
             voiceMode = status.voiceMode ?? "emotion_auto"
             voiceRefName = status.voiceRefName ?? "default"
             voiceModel = status.voiceModel ?? "auto"
@@ -213,6 +215,7 @@ final class AgentAPIService: ObservableObject {
     func updateVoiceConfig(
         ttsEnabled: Bool? = nil,
         voiceOnlyReply: Bool? = nil,
+        voiceEmotionDirectorEnabled: Bool? = nil,
         voiceMode: String? = nil,
         voiceRefName: String? = nil,
         voiceModel: String? = nil,
@@ -232,6 +235,10 @@ final class AgentAPIService: ObservableObject {
         if let v = voiceOnlyReply {
             self.voiceOnlyReply = v
             payload["voice_only_reply"] = v
+        }
+        if let v = voiceEmotionDirectorEnabled {
+            self.voiceEmotionDirectorEnabled = v
+            payload["voice_emotion_director_enabled"] = v
         }
         if let v = voiceMode {
             self.voiceMode = v

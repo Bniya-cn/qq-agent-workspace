@@ -1,0 +1,87 @@
+{
+  "count": 1009,
+  "items_length": 1009,
+  "vectors_shape": [
+    1009,
+    768
+  ],
+  "catalog_existing_counts": {
+    "Arknights": 450,
+    "BlueArchive": 281,
+    "Endfield": 34,
+    "GenshinImpact": 123,
+    "HonkaiStarRail": 79,
+    "WutheringWaves": 42
+  },
+  "indexed_counts": {
+    "Arknights": 450,
+    "BlueArchive": 281,
+    "Endfield": 34,
+    "GenshinImpact": 123,
+    "HonkaiStarRail": 79,
+    "WutheringWaves": 42
+  },
+  "source_images_unchanged": true,
+  "missing_rows": [],
+  "extra_rows": [],
+  "duplicate_row_keys": 0,
+  "image_hash_mismatches": [],
+  "all_vectors_finite": true,
+  "vector_norm_range": [
+    0.9999998807907104,
+    1.0000001192092896
+  ],
+  "build_summary": {
+    "encoded": 748,
+    "skipped": 261,
+    "failed": 0,
+    "total": 1009,
+    "kept": 1009,
+    "logit_scale": 3.3260085582733154,
+    "index_dir": "/Users/daijinglin/Desktop/qq-agent-workspace/bot/data/refs/ccip"
+  },
+  "failed_details": [],
+  "device_fallbacks": [],
+  "source_files_changed": [],
+  "identical_image_groups": [
+    [
+      "Arknights/Sharp.png",
+      "Arknights/领主·Sharp.png"
+    ]
+  ],
+  "backup_directory": "/var/folders/6_/ry_kb2792m39z28b6p6k6vw80000gn/T/ccip-index-before-resume-rxiazkdx",
+  "protected_genshin_indexed": {
+    "奥黛塔": true,
+    "布伦妮": true,
+    "米提亚": true,
+    "沃雅妮莎": true,
+    "薇斯纳": true,
+    "瓦列里": true,
+    "阿罗夏": true
+  },
+  "original_image_self_retrieval": [
+    {
+      "game": "Arknights",
+      "query": "Arknights/12F.png",
+      "top1": "Arknights/12F.png",
+      "cosine": 1.0,
+      "difference": 0.0,
+      "self_is_top1": true
+    },
+    {
+      "game": "Endfield",
+      "query": "Endfield/管理员（男）.png",
+      "top1": "Endfield/管理员（男）.png",
+      "cosine": 1.0,
+      "difference": 0.0,
+      "self_is_top1": true
+    }
+  ],
+  "unit_test": {
+    "command": "bot/.venv/bin/python -m unittest bot.tests.test_ccip_index -v",
+    "result": "OK",
+    "test_count": 1,
+    "duration_seconds": 6.833
+  },
+  "acceptance": "索引完整性与原图自回查通过；不代表角色识别准确率。"
+}

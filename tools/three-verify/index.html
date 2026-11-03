@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Three.js GLB Verify</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #141210; overflow: hidden; }
+  canvas { display: block; }
+  #hud { position: fixed; left: 12px; top: 12px; color: #e8dfd2; font: 12px/1.5 monospace; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/node_modules/three/build/three.module.js",
+    "three/addons/": "/node_modules/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="hud">loading…</div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
+const result = { status: 'loading', startedAt: Date.now() };
+window.__VERIFY__ = result;
+
+const W = 960, H = 720;
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.setSize(W, H);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.8;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x2a211b);
+const camera = new THREE.PerspectiveCamera(35, W / H, 0.1, 100);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x2a211b, 0.9));
+const key = new THREE.DirectionalLight(0xfff4d6, 2.2);
+key.position.set(-2, 4, 3);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.6);
+fill.position.set(3, 2, -2);
+scene.add(fill);
+
+const draco = new DRACOLoader();
+draco.setDecoderPath('/node_modules/three/examples/jsm/libs/draco/');
+const loader = new GLTFLoader();
+loader.setDRACOLoader(draco);
+
+loader.load('/lounge.glb', (gltf) => {
+  const anims = gltf.animations.map((a) => ({
+    name: a.name,
+    duration: +a.duration.toFixed(2),
+    tracks: a.tracks.length,
+  }));
+  let skinned = 0, meshes = 0, bones = 0;
+  gltf.scene.traverse((o) => {
+    if (o.isSkinnedMesh) skinned++;
+    if (o.isMesh) meshes++;
+    if (o.isBone) bones++;
+  });
+  scene.add(gltf.scene);
+  const box = new THREE.Box3().setFromObject(gltf.scene);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  camera.position.set(center.x, center.y + size.y * 0.15, center.z + Math.max(size.x, size.z) * 1.4);
+  camera.lookAt(center.x, center.y * 0.65, center.z);
+  renderer.render(scene, camera);
+
+  // play the first Amiya idle so the mixer path is exercised too
+  const idle = gltf.animations.find((a) => a.name === 'Amiya_Idle_A');
+  let mixerOk = false;
+  if (idle) {
+    const root = gltf.scene.getObjectByName('AI3D_Character') || gltf.scene;
+    const mixer = new THREE.AnimationMixer(root);
+    mixer.clipAction(idle).play();
+    mixer.update(0.5);
+    renderer.render(scene, camera);
+    mixerOk = true;
+  }
+
+  result.status = 'ok';
+  result.elapsedMs = Date.now() - result.startedAt;
+  result.animations = anims;
+  result.skinnedMeshes = skinned;
+  result.meshes = meshes;
+  result.bones = bones;
+  result.mixerPlayed = mixerOk;
+  result.size = { x: +size.x.toFixed(2), y: +size.y.toFixed(2), z: +size.z.toFixed(2) };
+  document.getElementById('hud').textContent =
+    `ok · ${anims.length} clips · ${skinned} skinned · ${meshes} meshes · ${bones} bones`;
+}, undefined, (err) => {
+  result.status = 'error';
+  result.error = String(err && err.message ? err.message : err);
+  document.getElementById('hud').textContent = 'error: ' + result.error;
+});
+</script>
+</body>
+</html>

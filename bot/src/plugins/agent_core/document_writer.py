@@ -48,17 +48,13 @@ def _build_candidate_endpoints() -> list[tuple[str, str, str]]:
             if "api.deepseek.com" in ds_base.lower() and ds_model != "deepseek-chat":
                 candidates.append((ds_key, ds_base, "deepseek-chat"))
 
-    qwen_key = (os.getenv("DASHSCOPE_API_KEY") or "").strip()
-    qwen_model = (os.getenv("DASHSCOPE_MODEL") or "qwen-plus").strip()
-    if qwen_key:
-        candidates.append((qwen_key, "https://dashscope.aliyuncs.com/compatible-mode/v1", qwen_model))
     return candidates
 
 
 async def generate(prompt: str, formats: list[str], *, resume: dict | None = None) -> str:
     candidates = _build_candidate_endpoints()
     if not candidates:
-        raise DocumentGenerationError("未配置 DeepSeek 或百炼 API Key，暂时无法生成文档正文。")
+        raise DocumentGenerationError("未配置 DEEPSEEK_API_KEY，暂时无法生成文档正文。")
     if len(prompt) > MAX_INPUT_CHARS:
         raise DocumentGenerationError("这次文档要求超过 32000 字，请拆分任务后重试。")
     try:

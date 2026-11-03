@@ -1,0 +1,221 @@
+    :root {
+      --mode-accent: #0EA5E9;
+      --mode-accent-soft: rgba(14, 165, 233, 0.12);
+      --mode-accent-border: rgba(14, 165, 233, 0.35);
+    }
+    body[data-workspace="voice"] {
+      --mode-accent: #10B981;
+      --mode-accent-soft: rgba(16, 185, 129, 0.12);
+      --mode-accent-border: rgba(16, 185, 129, 0.35);
+    }
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+    body {
+      background-color: #090A0F;
+      color: #F1F5F9;
+      background-image:
+        radial-gradient(circle at 12% 0%, var(--mode-accent-soft), transparent 38%),
+        linear-gradient(180deg, rgba(255,255,255,0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+      background-size: 100% 100%, 32px 32px, 32px 32px;
+      transition: background-image 0.25s ease;
+    }
+    .tactile-btn {
+      transition: transform 0.12s cubic-bezier(0.2, 0, 0, 1), background-color 0.15s ease, border-color 0.15s ease;
+    }
+    .tactile-btn:active:not(:disabled) {
+      transform: scale(0.98) translateY(1px);
+    }
+    .accent-border { border-color: var(--mode-accent-border); }
+    .accent-bg { background-color: var(--mode-accent); }
+    .accent-text { color: var(--mode-accent); }
+    .accent-pill {
+      background-color: var(--mode-accent-soft);
+      border: 1px solid var(--mode-accent-border);
+      color: var(--mode-accent);
+    }
+    input[type="range"] {
+      accent-color: var(--mode-accent);
+    }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #090A0F; }
+    ::-webkit-scrollbar-thumb { background: #262B3D; border-radius: 3px; }
+
+    /* 仅目标多行文本框允许纵向调整高度，严格限制在父容器宽度内，禁止普通卡片横向拖拽溢出 */
+    textarea,
+    .resizable-box,
+    .prompt-preview {
+      resize: vertical;
+      max-width: 100%;
+      width: 100%;
+      overflow-y: auto;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      box-sizing: border-box;
+    }
+
+    /* 日志、代码块与对话流在各自容器内滚动，禁止双向拖拽或撑宽页面 */
+    pre,
+    .log-box,
+    .log-container,
+    #logs,
+    #log-list,
+    #log-list-box,
+    #dialogue-list,
+    #dialogue-list-box,
+    #profile-manage-result {
+      resize: none;
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    .dialogue-item,
+    .msg-bubble {
+      resize: none;
+      max-width: 100%;
+      min-width: 0;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    .rt-card {
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(51, 65, 85, 0.9);
+      border-radius: 14px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+    }
+    .rt-badge {
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .rt-badge.running { background: rgba(245, 158, 11, 0.2); color: #fcd34d; border: 1px solid rgba(245, 158, 11, 0.5); }
+    .rt-badge.done { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.5); }
+    .rt-badge.idle { background: rgba(71, 85, 105, 0.25); color: #94a3b8; border: 1px solid rgba(100, 116, 139, 0.4); }
+    .rt-badge.error { background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.5); }
+    .rt-bar-bg {
+      height: 7px;
+      background: rgba(30, 41, 59, 0.95);
+      border-radius: 999px;
+      overflow: hidden;
+      margin: 2px 0 4px;
+    }
+    .rt-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #38bdf8, #818cf8, #34d399);
+      transition: width 0.3s ease;
+    }
+    .rt-field-label {
+      font-size: 11px;
+      color: #94a3b8;
+      margin-top: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .rt-textarea {
+      width: 100%;
+      max-width: 100%;
+      min-height: 70px;
+      background: rgba(2, 6, 23, 0.82);
+      color: #f1f5f9;
+      border: 1px solid rgba(71, 85, 105, 0.65);
+      border-radius: 8px;
+      padding: 7px 9px;
+      font-size: 12px;
+      line-height: 1.45;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      resize: vertical;
+      overflow-y: auto;
+      overflow-x: auto;
+      box-sizing: border-box;
+    }
+    .rt-textarea:focus {
+      outline: none;
+      border-color: #38bdf8;
+    }
+
+#conversation-daily-center button:disabled { opacity: .5; cursor: wait; }
+
+/* ==== 3D 休息室舞台（首屏占位 + 懒加载，自适应容器宽度不溢出） ==== */
+.stage-shell {
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: 21 / 9;
+  min-height: 220px;
+  max-height: 520px;
+  contain: layout paint;
+}
+
+@media (min-width: 1024px) {
+  .stage-shell {
+    min-height: 340px;
+  }
+}
+
+#lounge-stage {
+  contain: strict;
+}
+
+#lounge-stage-placeholder {
+  transition: opacity .45s ease;
+  background: radial-gradient(circle at 50% 55%, rgba(56, 189, 248, .06), transparent 60%);
+}
+
+.stage-shell.is-ready #lounge-stage-placeholder {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.stage-shell.is-failed #lounge-stage-placeholder {
+  background-image: url('/panel-assets/stage/assets/fallback.png');
+  background-size: cover;
+  background-position: center;
+}
+
+.stage-loader {
+  display: flex;
+  gap: 7px;
+}
+
+.stage-loader span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #38bdf8;
+  animation: stagePulse 1.2s ease-in-out infinite;
+}
+
+.stage-loader span:nth-child(2) { animation-delay: .15s; }
+.stage-loader span:nth-child(3) { animation-delay: .3s; }
+
+@keyframes stagePulse {
+  0%, 80%, 100% { opacity: .22; transform: scale(.85); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+@media (max-width: 767px) {
+  .stage-shell { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-loader span { animation: none; opacity: .6; }
+}

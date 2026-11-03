@@ -76,6 +76,7 @@ struct AgentStatus: Codable, Equatable {
     var voiceEnabled: Bool?
     var ttsEnabled: Bool?
     var voiceOnlyReply: Bool?
+    var voiceEmotionDirectorEnabled: Bool?
     var voiceMode: String?
     var voiceRefName: String?
     var voiceModel: String?
@@ -99,6 +100,7 @@ struct AgentStatus: Codable, Equatable {
         case voiceEnabled = "voice_enabled"
         case ttsEnabled = "tts_enabled"
         case voiceOnlyReply = "voice_only_reply"
+        case voiceEmotionDirectorEnabled = "voice_emotion_director_enabled"
         case voiceMode = "voice_mode"
         case voiceRefName = "voice_ref_name"
         case voiceModel = "voice_model"
@@ -123,6 +125,7 @@ struct AgentStatus: Codable, Equatable {
         voiceEnabled: false,
         ttsEnabled: true,
         voiceOnlyReply: false,
+        voiceEmotionDirectorEnabled: false,
         voiceMode: "emotion_auto",
         voiceRefName: "default",
         voiceSpeed: 1.0,
@@ -144,6 +147,7 @@ struct APIAck: Codable {
     var activeCharacter: String?
     var ttsEnabled: Bool?
     var voiceOnlyReply: Bool?
+    var voiceEmotionDirectorEnabled: Bool?
     var voiceMode: String?
     var voiceRefName: String?
     var voiceSpeed: Double?
@@ -157,6 +161,7 @@ struct APIAck: Codable {
         case activeCharacter = "active_character"
         case ttsEnabled = "tts_enabled"
         case voiceOnlyReply = "voice_only_reply"
+        case voiceEmotionDirectorEnabled = "voice_emotion_director_enabled"
         case voiceMode = "voice_mode"
         case voiceRefName = "voice_ref_name"
         case voiceSpeed = "voice_speed"

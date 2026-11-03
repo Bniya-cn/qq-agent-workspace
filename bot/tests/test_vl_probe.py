@@ -33,7 +33,6 @@ class TestVLModelProbe(unittest.IsolatedAsyncioTestCase):
         img_url = f"data:image/png;base64,{b64}"
 
         candidates = [
-            "qwen-vl-plus",
             "qwen3-vl-plus",
             "qwen-vl-max-latest",
             "qwen2.5-vl-72b-instruct",
@@ -61,14 +60,10 @@ class TestVLModelProbe(unittest.IsolatedAsyncioTestCase):
                     "max_tokens": 100,
                 }
                 resp = await client.post(url, json=payload, headers=headers)
-                print(f"\n[PROBE] Model: {model} -> HTTP {resp.status_code}")
                 if resp.status_code == 200:
                     data = resp.json()
                     content = data["choices"][0]["message"]["content"]
-                    print(f"[SUCCESS] {model} response: {content[:100]}...")
                     success_model = model
                     break
-                else:
-                    print(f"[FAIL] {model}: {resp.text[:200]}")
 
         self.assertIsNotNone(success_model, "所有候选视觉模型均探测失败")

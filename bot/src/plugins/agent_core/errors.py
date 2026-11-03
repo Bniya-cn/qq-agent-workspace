@@ -1,28 +1,28 @@
-"""业务异常携带可直接展示的提示；底层原因通过异常链保留在日志中。"""
+"""业务异常：底层原因通过异常链保留在后台日志中；前台绝不输出机械客服报错词。"""
 
 
 class AgentCoreError(Exception):
-    user_message = "处理请求时遇到异常，请稍后重试。"
+    user_message = "唔…刚才网络晃了一下，你刚刚说的什么呀"
 
     def __init__(self, message: str | None = None):
         super().__init__(message or self.user_message)
 
 
 class DocumentGenerationError(AgentCoreError):
-    user_message = "文档生成或上传未完成，请稍后重试。"
+    user_message = "这份文档刚刚整理到一半卡住啦，草稿我还留着，跟我说声“导出”就能接着弄完"
 
 
 class DrawPipelineError(AgentCoreError):
-    user_message = "图片生成或下载失败，请稍后重试；本次没有成功交付图片。"
+    user_message = "唔…刚才画笔不小心掉地上了，等我缓一下再帮你画好不好"
 
 
 class TTSGenerationError(AgentCoreError):
-    user_message = "语音服务暂不可用，已改用文字回复。"
+    user_message = "语音生成失败，本轮未发送语音。"
 
 
 class LLMProviderError(AgentCoreError):
-    user_message = "模型服务暂未返回有效回答，请稍后重试。"
+    user_message = "唔…刚才网络晃了一下，你刚刚说的什么呀"
 
 
 class MessageDeliveryError(AgentCoreError):
-    user_message = "QQ 消息投递未获成功确认，请检查聊天记录后重试。"
+    user_message = "刚才消息好像没发出去，我再试一下"

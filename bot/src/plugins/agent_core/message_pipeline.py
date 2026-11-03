@@ -42,6 +42,56 @@ ALIASES = {
 }
 _TASK_COMMANDS = {"work", "doc", "pdf", "docx", "word", "md", "markdown", "export", "draw", "workflow"}
 
+_AMIYA_NAME_RE = re.compile(
+    "|".join(re.escape(alias) for alias in sorted(ALIASES["amiya"], key=len, reverse=True)),
+    re.IGNORECASE,
+)
+_AMIYA_STOP_RE = re.compile(
+    r"闭(?:上)?嘴|住口|别说了|不要再说(?:话)?|别再说(?:话)?|不用(?:再)?说(?:话)?|"
+    r"不必(?:再)?说(?:话)?|别继续说(?:话)?|别讲话|不要讲话|别吵(?:了)?|"
+    r"安静(?:点|一点)?|闭麦|少说(?:两句)?|别插嘴|消停(?:点|一下)|别来烦我|别烦我|"
+    r"不想听你说(?:话)?|我不想听(?:你说话)?|别叨叨|不要说话",
+    re.IGNORECASE,
+)
+_AMIYA_FRUSTRATION_RE = re.compile(
+    r"(?:你|阿米娅|兔兔|amiya).{0,10}(?:烦不烦|烦死了|真烦|很烦|吵死了|好吵|太吵|"
+    r"啰嗦|废话|聒噪|没完没了|受不了|不耐烦|讨厌|没耐心|无语)|"
+    r"(?:烦不烦|烦死了|真烦|很烦|吵死了|好吵|太吵|啰嗦|废话|聒噪|没完没了|"
+    r"受不了|不耐烦|讨厌|没耐心|无语).{0,10}(?:你|阿米娅|兔兔|amiya)",
+    re.IGNORECASE,
+)
+_AMIYA_WAKE_RE = re.compile(
+    r"(?:继续(?:说|讲|回答)|(?:可以|允许你)(?:继续)?(?:说|讲|回答)|"
+    r"恢复.{0,4}(?:说话|发言)|出来.{0,3}(?:说|回答)|开口吧|说吧|回答吧|继续吧)",
+    re.IGNORECASE,
+)
+
+
+def classify_amiya_interaction(
+    text: str,
+    *,
+    is_at_me: bool,
+    is_private: bool,
+    character: str = "amiya",
+) -> str | None:
+    """仅识别明确指向阿米娅的停话/不耐烦和明确唤醒语，避免误判无关抱怨。"""
+    s = (text or "").strip()
+    if not s:
+        return None
+
+    named_amiya = bool(_AMIYA_NAME_RE.search(s))
+    directed = bool(is_at_me or is_private or named_amiya)
+    if not directed:
+        return None
+
+    if _AMIYA_STOP_RE.search(s) and (named_amiya or (character or "").strip().lower() == "amiya"):
+        return "silence"
+    if _AMIYA_WAKE_RE.search(s):
+        return "wake"
+    if _AMIYA_FRUSTRATION_RE.search(s) and (named_amiya or (character or "").strip().lower() == "amiya"):
+        return "silence"
+    return None
+
 _PURE_QA_OR_TRANSLATE_RE = re.compile(
     r"^(?:请问|帮我|给我|麻烦|能|可以)?(?:看看|看下|看一看|讲讲|说说|解释|翻译|总结|概括|识别|读一下|念一下)?"
     r"(?:这(?:张|幅|个)?(?:图|图片|照片|表情|截图|消息|话|内容)?(?:里|里面|上|上面)?)?"
@@ -95,8 +145,11 @@ def parse_message(event: Any, *, character: str, last_interaction: float | None,
     reply = getattr(event, "reply", None)
     sender = getattr(getattr(reply, "sender", None), "user_id", None)
     at_ids = []
-    # QQ 引用消息紧随的第一个 At 是协议附带的回复对象，不参与其他人定向判断。
+    # QQ 引用消息紧随的第一个 At 是协议附带的回复对象：
+    # - 若同时 @ 了机器人或点了机器人名字，不将其视为“排他性 @ 他人”；
+    # - 若既未 @ 机器人也未点机器人名字，则属于群友之间的定向引用回复（has_other_at=True），免艾特模式下也不横插一脚。
     skip_reply_at = False
+    skipped_reply_other_at = bool(sender is not None and str(sender) not in ("", self_id))
     for seg in segments:
         if seg.type == "reply":
             skip_reply_at = True
@@ -106,6 +159,8 @@ def parse_message(event: Any, *, character: str, last_interaction: float | None,
             if skip_reply_at and (sender is None or target == str(sender)):
                 skip_reply_at = False
                 if target != self_id:
+                    if target:
+                        skipped_reply_other_at = True
                     continue
             at_ids.append(target)
         if seg.type != "text" or str(seg.data.get("text", "")).strip():
@@ -114,12 +169,51 @@ def parse_message(event: Any, *, character: str, last_interaction: float | None,
     aliases = ALIASES.get(character, ALIASES["amiya"])
     name_wake = any(re.search(rf"(?<![a-zA-Z0-9_]){re.escape(a)}(?![a-zA-Z0-9_])", clean_text, re.I)
                     if a.isascii() else a in clean_text for a in aliases)
+
+    # 记录群内多人发言时间轴与当前消息上下文元数据（用于多人连续说话时精准对齐发言时间与对象）
+    try:
+        from . import local_rag_service
+        gid = getattr(event, "group_id", None)
+        mid = getattr(event, "message_id", None)
+        uid = str(getattr(event, "user_id", "") or "")
+        ev_sender = getattr(event, "sender", None)
+        sname = (
+            getattr(ev_sender, "card", None)
+            or getattr(ev_sender, "nickname", None)
+            or (ev_sender.get("card") or ev_sender.get("nickname") if isinstance(ev_sender, dict) else "")
+            or uid
+        )
+        meta = local_rag_service.record_group_timeline_event(
+            str(gid) if gid is not None else None,
+            str(mid or ""),
+            uid,
+            str(sname).strip(),
+            clean_text,
+        )
+        local_rag_service._CURRENT_MSG_META.set(meta)
+    except Exception:
+        pass
+
+    is_group_ev = getattr(event, "group_id", None) is not None
+    raw_intent = classify_intent(
+        clean_text,
+        has_image=any(s.type == "image" for s in segments),
+        detect_draw=detect_draw,
+        detect_formats=detect_formats,
+    )
+    # 群聊中未 @ 机器人、未带名字唤醒、且非 /draw 指令的普通群友闲聊，绝不触发高耗时生图
+    if is_group_ev and raw_intent in (Intent.TEXT_TO_IMAGE, Intent.IMAGE_TO_IMAGE):
+        if not (at_me or name_wake or clean_text.lower().startswith(("/draw", "/workflow"))):
+            raw_intent = Intent.CHAT
+
+    has_other_at = any(target not in ("", self_id) for target in at_ids) or (
+        skipped_reply_other_at and not at_me and not name_wake
+    )
     return ParsedMessage(
         clean_text, "", at_me, name_wake,
         last_interaction is not None and 0 <= now - last_interaction <= 60 and len(clean_text) >= 2,
-        classify_intent(clean_text, has_image=any(s.type == "image" for s in segments),
-                        detect_draw=detect_draw, detect_formats=detect_formats),
-        any(target not in ("", self_id) for target in at_ids),
+        raw_intent,
+        has_other_at,
     )
 
 

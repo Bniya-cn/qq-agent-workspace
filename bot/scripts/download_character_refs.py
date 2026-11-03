@@ -48,19 +48,42 @@ def get_headers(url: str) -> dict[str, str]:
     }
 
 SEM = asyncio.Semaphore(12)
+IMAGE_SHA1_BY_URL: dict[str, str] = {}
 
 
 async def _fetch_json(client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> dict[str, Any]:
+    # 分类超过单页上限时继续读取，避免漏掉后续新增角色。
+    if params.get("list") == "categorymembers":
+        combined: dict[str, Any] = {"query": {"categorymembers": []}}
+        page_params = dict(params)
+        while True:
+            response = await client.get(url, params=page_params, headers=get_headers(url))
+            response.raise_for_status()
+            page = response.json()
+            if "error" in page:
+                raise RuntimeError(str(page["error"]))
+            combined["query"]["categorymembers"].extend(page.get("query", {}).get("categorymembers", []))
+            if not page.get("continue"):
+                return combined
+            page_params.update(page["continue"])
+    if params.get("prop") == "imageinfo":
+        params = {**params, "iiprop": "url|sha1"}
     for attempt in range(3):
         try:
             resp = await client.get(url, params=params, headers=get_headers(url))
             if resp.status_code == 200:
-                return resp.json()
+                data = resp.json()
+                for page in data.get("query", {}).get("pages", {}).values():
+                    for image in page.get("imageinfo", []):
+                        if image.get("url") and image.get("sha1"):
+                            value = image["sha1"]
+                            IMAGE_SHA1_BY_URL[image["url"]] = value.lower() if len(value) == 40 else f"{int(value, 36):040x}"
+                return data
         except Exception as e:
             if attempt == 2:
                 print(f"[WARN] 请求失败 {url} params={params}: {e}", file=sys.stderr, flush=True)
             await asyncio.sleep(0.5 + attempt * 0.5)
-    return {}
+    raise RuntimeError(f"立绘目录查询失败: {url}")
 
 
 async def _download_file(
@@ -141,7 +164,7 @@ async def fetch_hsr_characters(client: httpx.AsyncClient, limit: int = 0) -> lis
             # normalized 或原始
             char_name = None
             for k, c in title_map.items():
-                if k in t or c in t:
+                if k.split(":", 1)[-1].replace(" ", "_") == t.split(":", 1)[-1].replace(" ", "_"):
                     char_name = c
                     break
             if not char_name:
@@ -202,8 +225,8 @@ async def fetch_genshin_characters(client: httpx.AsyncClient, limit: int = 0) ->
             t = pinfo.get("title", "")
             infos = pinfo.get("imageinfo", [])
             if infos and "url" in infos[0]:
-                for _, cname in title_map.items():
-                    if cname in t:
+                for source_title, cname in title_map.items():
+                    if source_title.split(":", 1)[-1].replace(" ", "_") == t.split(":", 1)[-1].replace(" ", "_"):
                         results.append((cname, infos[0]["url"]))
                         break
     return results
@@ -265,8 +288,8 @@ async def fetch_wuwa_characters(client: httpx.AsyncClient, limit: int = 0) -> li
             t = pinfo.get("title", "")
             infos = pinfo.get("imageinfo", [])
             if infos and "url" in infos[0]:
-                for _, cname in title_map.items():
-                    if cname in t:
+                for source_title, cname in title_map.items():
+                    if source_title.split(":", 1)[-1].replace(" ", "_") == t.split(":", 1)[-1].replace(" ", "_"):
                         results.append((cname, infos[0]["url"]))
                         break
     return results
@@ -324,8 +347,8 @@ async def fetch_arknights_characters(client: httpx.AsyncClient, limit: int = 0) 
             t = pinfo.get("title", "")
             infos = pinfo.get("imageinfo", [])
             if infos and "url" in infos[0]:
-                for _, cname in title_map.items():
-                    if cname in t:
+                for source_title, cname in title_map.items():
+                    if source_title.split(":", 1)[-1].replace(" ", "_") == t.split(":", 1)[-1].replace(" ", "_"):
                         results.append((cname, infos[0]["url"]))
                         break
     return results
